@@ -1,5 +1,6 @@
 # as_zip
-as_zip package
+A PLSQL package to get a file from a zip-file into a blob, are to create a zip-file from file(s) based on a/some blob(s).
+
 * Can read deflate64 format
 * Can read zip64 format
 * with Winzip and zipcrypto encryption
