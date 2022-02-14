@@ -1660,7 +1660,7 @@ $END
     l_buf raw(3999);
     l_offs_dir_header integer;
     l_offs_end_header integer;
-    l_comment raw(32767) := utl_raw.cast_to_raw( 'Implementation by Anton Scheffer, version 1.11' );
+    l_comment raw(32767) := utl_raw.cast_to_raw( 'Implementation by Anton Scheffer, version 1.12' );
   begin
     l_offs_dir_header := dbms_lob.getlength( p_zipped_blob );
     l_offs := 1;
