@@ -18,6 +18,11 @@ is
   c_CENTRAL_FILE_HEADER      constant raw(4) := hextoraw( '504B0102' ); -- Central file header signature
   c_END_OF_CENTRAL_DIRECTORY constant raw(4) := hextoraw( '504B0506' ); -- End of central directory signature
   --
+  type tp_zipcrypto_tab is table of raw(4) index by varchar2(2);
+  l_zipcrypto_tab tp_zipcrypto_tab;
+  l_key1 raw(4);
+  l_key2 raw(4);
+  l_key3 raw(4);
 $IF as_zip.use_winzip_encryption
 $THEN
 $IF as_zip.use_dbms_crypto
@@ -411,11 +416,6 @@ $ELSE
   end;
 $END
 $END
-  type tp_zipcrypto_tab is table of raw(4) index by varchar2(2);
-  l_zipcrypto_tab tp_zipcrypto_tab;
-  l_key1 raw(4);
-  l_key2 raw(4);
-  l_key3 raw(4);
   --
   function inflate( p_cmpr blob, p_deflate64 boolean := true )
   return blob
@@ -1499,7 +1499,12 @@ $END
     --
     dbms_lob.createtemporary( l_tmp, true, dbms_lob.call );
     dbms_lob.copy( l_tmp, l_rv, dbms_lob.lobmaxsize, 1, l_key_bits / 16 + 2 + 1 );
+$IF as_zip.use_dbms_crypto
+$THEN
     l_mac := dbms_crypto.mac( l_tmp, dbms_crypto.HMAC_SH1, utl_raw.substr( l_keys, 1 + l_key_bits / 8, l_key_bits / 8 ) );
+$ELSE
+    l_mac := mac_sha1( l_tmp, utl_raw.substr( l_keys, 1 + l_key_bits / 8, l_key_bits / 8 ) );
+$END
     dbms_lob.freetemporary( l_tmp );
     dbms_lob.writeappend( l_rv, 10, l_mac );
     return l_rv;
