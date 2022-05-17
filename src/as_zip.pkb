@@ -1651,8 +1651,10 @@ $END
     end if;
   end;
   --
-  procedure finish_zip( p_zipped_blob in out blob )
-  is
+  procedure finish_zip( 
+      p_zipped_blob in out blob 
+     ,p_comment varchar2 default null 
+  ) is
     l_cnt integer := 0;
     l_offs integer;
     l_n pls_integer;
@@ -1660,7 +1662,7 @@ $END
     l_buf raw(3999);
     l_offs_dir_header integer;
     l_offs_end_header integer;
-    l_comment raw(32767) := utl_raw.cast_to_raw( 'Implementation by Anton Scheffer, version 1.12' );
+    l_comment raw(32767) := utl_raw.cast_to_raw( p_comment );
   begin
     l_offs_dir_header := dbms_lob.getlength( p_zipped_blob );
     l_offs := 1;
