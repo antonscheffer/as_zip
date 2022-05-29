@@ -7,6 +7,8 @@ is
 ** Website: http://technology.amis.nl/blog
 **
 ** Changelog:
+**   Date: 17-05-2022 shredder2003
+**     add p_comment parameter to finish_zip
 **   Date: 20-09-2021
 **     major rewrite
 **     more support for deflate64
@@ -103,7 +105,10 @@ THE SOFTWARE.
     , p_password varchar2 := null
     );
 --
-  procedure finish_zip( p_zipped_blob in out blob );
+  procedure finish_zip( 
+      p_zipped_blob in out blob
+     ,p_comment varchar2 default null 
+  );
 --
   procedure save_zip
     ( p_zipped_blob blob
