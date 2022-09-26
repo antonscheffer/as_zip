@@ -2,11 +2,15 @@ CREATE OR REPLACE package as_zip
 is
 /**********************************************
 **
-** Author: Anton Scheffer
+Author: Anton Scheffer
 ** Date: 25-01-2012
 ** Website: http://technology.amis.nl/blog
 **
 ** Changelog:
+**   Date: 10-09-2022
+**     add delete_file, add_file, get_count, get_comment and get_file_ino
+**     add character set any_cs to parameter p_file_name
+**        this makes p_nfile_name obsolete
 **   Date: 17-05-2022 shredder2003
 **     add p_comment parameter to finish_zip
 **   Date: 20-09-2021
@@ -60,6 +64,14 @@ THE SOFTWARE.
   --
   type file_list is table of clob;
   --
+  type file_info is record
+    ( found boolean
+	, idx integer
+    , len pls_integer
+    , name clob
+    , comment clob
+    );
+  --
   function get_file_list
     ( p_zipped_blob blob
     , p_encoding varchar2 := null
@@ -79,7 +91,7 @@ THE SOFTWARE.
   --
   function get_file
     ( p_zipped_blob blob
-    , p_file_name varchar2 := null
+    , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
     , p_nfile_name nvarchar2 := null
     , p_idx number := null
@@ -90,7 +102,7 @@ THE SOFTWARE.
   function get_file
     ( p_dir varchar2
     , p_zip_file varchar2
-    , p_file_name varchar2
+    , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
     , p_nfile_name nvarchar2 := null
     , p_idx number := null
@@ -99,15 +111,16 @@ THE SOFTWARE.
   return blob;
   --
   procedure add1file
-    ( p_zipped_blob in out blob
-    , p_name varchar2
+    ( p_zipped_blob in out nocopy blob
+    , p_name varchar2 character set any_cs
     , p_content blob
     , p_password varchar2 := null
+    , p_date date := null
     );
 --
-  procedure finish_zip( 
-      p_zipped_blob in out blob
-     ,p_comment varchar2 default null 
+  procedure finish_zip(
+      p_zipped_blob in out nocopy blob
+     ,p_comment varchar2 default null
   );
 --
   procedure save_zip
@@ -115,5 +128,45 @@ THE SOFTWARE.
     , p_dir varchar2
     , p_filename varchar2
     );
+--
+  function get_count( p_zipped_blob blob )
+  return integer;
+--
+  function get_comment( p_zipped_blob blob )
+  return clob;
+--
+  function get_file_info
+    ( p_zipped_blob blob
+    , p_name varchar2 character set any_cs := null
+    , p_idx number := null
+    , p_encoding varchar2 := null
+    )
+  return file_info;
+--
+  function get_file_info
+    ( p_zipped_blob blob
+	, p_file_info in out file_info
+    , p_name varchar2 character set any_cs := null
+    , p_idx number := null
+    , p_encoding varchar2 := null
+    )
+  return boolean;
+--
+  procedure delete_file
+    ( p_zipped_blob in out nocopy blob
+    , p_name varchar2 character set any_cs := null
+    , p_idx number := null
+    , p_encoding varchar2 := null
+    );
+--
+  procedure add_file
+    ( p_zipped_blob in out nocopy blob
+    , p_name varchar2 character set any_cs
+    , p_content blob
+    , p_comment varchar2 character set any_cs := null
+    , p_password varchar2 := null
+    , p_date date := null
+    );
+--
 end;
 /
