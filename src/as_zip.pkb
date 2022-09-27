@@ -1,5 +1,8 @@
 CREATE OR REPLACE package body as_zip
 is
+  --
+  c_version constant raw(1) := hextoraw( '15' ); -- version 2.1
+  --
   type tp_zip_info is record
     ( len integer
     , cnt integer
@@ -23,6 +26,7 @@ is
     , k   pls_integer
     , utf8 boolean
     , crc32 raw(4)
+    , external_file_attr raw(4)
     , name1 raw( 32767 )
     , name2 raw( 32767 )
     , name3 raw( 100 )
@@ -1042,22 +1046,22 @@ $END
     p_info.len_comment := little_endian( l_buf, 21, 2 );
     if p_info.len_comment > 0 and p_get_comment
     then
-	  -- 32765, so size of comment and comment1 fit together in a raw(32767)
-	  p_info.comment1 := dbms_lob.substr( p_zip
-	                                    , least( p_info.len_comment, 32765 )
+      -- 32765, so size of comment and comment1 fit together in a raw(32767)
+      p_info.comment1 := dbms_lob.substr( p_zip
+                                        , least( p_info.len_comment, 32765 )
                                         , p_info.idx_eocd + 22
                                         );
-	  if p_info.len_comment > 32765
-	  then
-	    p_info.comment2 := dbms_lob.substr( p_zip
-	                                      , least( p_info.len_comment - 32765, 32767 )
+      if p_info.len_comment > 32765
+      then
+        p_info.comment2 := dbms_lob.substr( p_zip
+                                          , least( p_info.len_comment - 32765, 32767 )
                                           , p_info.idx_eocd + 22 + 32765
                                           );
       end if;
-	  if p_info.len_comment > 65532
-	  then
-	    p_info.comment3 := dbms_lob.substr( p_zip
-	                                      , least( p_info.len_comment - 65532, 100 )
+      if p_info.len_comment > 65532
+      then
+        p_info.comment3 := dbms_lob.substr( p_zip
+                                          , least( p_info.len_comment - 65532, 100 )
                                           , p_info.idx_eocd + 22 + 65532
                                           );
       end if;
@@ -1351,6 +1355,7 @@ $END
     p_cfh.n := little_endian( l_buf, 29, 2 );
     p_cfh.m := little_endian( l_buf, 31, 2 );
     p_cfh.k := little_endian( l_buf, 33, 2 );
+    p_cfh.external_file_attr := utl_raw.substr( l_buf, 39, 4 );
     p_cfh.len := 46 + p_cfh.n + p_cfh.m + p_cfh.k;
     --
     p_cfh.utf8 := bitand( to_number( utl_raw.substr( l_buf, 10, 1 ), 'XX' ), 8 ) > 0;
@@ -1415,26 +1420,26 @@ $END
           p_cfh.zip64_offset := 46 + p_cfh.n + l_tmp;
         end if;
       end if;
-    end if;  
+    end if;
     --
     if p_cfh.k > 0 and p_get_comment
     then
-	  -- 32765, so size of comment and comment1 fit together in a raw(32767)
-	  p_cfh.comment1 := dbms_lob.substr( p_zip
+      -- 32765, so size of comment and comment1 fit together in a raw(32767)
+      p_cfh.comment1 := dbms_lob.substr( p_zip
                                        , least( p_cfh.k, 32765 )
                                        , p_ind + 46 + p_cfh.n + p_cfh.m
                                        );
-	  if p_cfh.k > 32765
-	  then
-	    p_cfh.comment2 := dbms_lob.substr( p_zip
-	                                     , least( p_cfh.k - 32765, 32767 )
+      if p_cfh.k > 32765
+      then
+        p_cfh.comment2 := dbms_lob.substr( p_zip
+                                         , least( p_cfh.k - 32765, 32767 )
                                          , p_ind + 46 + p_cfh.n + p_cfh.m + 32765
                                          );
       end if;
-	  if p_cfh.k > 65532
-	  then
-	    p_cfh.comment3 := dbms_lob.substr( p_zip
-	                                     , least( p_cfh.k - 65532, 100 )
+      if p_cfh.k > 65532
+      then
+        p_cfh.comment3 := dbms_lob.substr( p_zip
+                                         , least( p_cfh.k - 65532, 100 )
                                          , p_ind + 46 + p_cfh.n + p_cfh.m + 65532
                                          );
       end if;
@@ -1445,19 +1450,19 @@ $END
   --
   procedure write_eocd
     ( p_zip in out nocopy blob
-	, p_force_zip64 boolean
-	, p_count integer
-	, p_len_cd integer
-	, p_offs_cd integer
-	, p_info tp_zip_info
-	)
+    , p_force_zip64 boolean
+    , p_count integer
+    , p_len_cd integer
+    , p_offs_cd integer
+    , p_info tp_zip_info
+    )
   is
   begin
     if p_force_zip64 or p_count >= 65535 -- FFFF
     then
       dbms_lob.writeappend( p_zip
-	                      , 96
-						  , utl_raw.concat( c_ZIP64_END_OF_CD
+                          , 96
+                          , utl_raw.concat( c_ZIP64_END_OF_CD
                                           , '2C000000000000002D002D000000000000000000'
                                           , little_endian( p_count, 8 )
                                           , little_endian( p_count, 8 )
@@ -1470,7 +1475,7 @@ $END
                                           , c_END_OF_CENTRAL_DIRECTORY
                                           , 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
                                           )
-						  );
+                          );
     else
       dbms_lob.writeappend( p_zip
                           , 20
@@ -1485,22 +1490,22 @@ $END
     end if;
     dbms_lob.writeappend( p_zip
                         , p_info.len_comment + 2
-						, utl_raw.concat( little_endian( p_info.len_comment, 2 ), p_info.comment1 )
-						);
+                        , utl_raw.concat( little_endian( p_info.len_comment, 2 ), p_info.comment1 )
+                        );
     if p_info.comment2 is not null
-	then
+    then
       dbms_lob.writeappend( p_zip
-	                      , utl_raw.length( p_info.comment2 )
-						  , p_info.comment2
-						  );
-	end if;
+                          , utl_raw.length( p_info.comment2 )
+                          , p_info.comment2
+                          );
+    end if;
     if p_info.comment3 is not null
-	then
+    then
       dbms_lob.writeappend( p_zip
-	                      , utl_raw.length( p_info.comment3 )
-						  , p_info.comment3
-						  );
-	end if;
+                          , utl_raw.length( p_info.comment3 )
+                          , p_info.comment3
+                          );
+    end if;
   end;
   --
   function get_file_list
@@ -1549,12 +1554,12 @@ $END
                                          , l_cfh.name3
                                          , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
                                          );
-	  end if;
+      end if;
       l_ind := l_ind + l_cfh.len;
       l_idx := l_idx + 1;
     end loop;
-	--	
-    return l_rv;	
+    --
+    return l_rv;
   end;
   --
   function get_file_list
@@ -1585,7 +1590,7 @@ $END
     l_utf8_name raw(32767);
     l_info tp_zip_info;
     l_cfh tp_cfh;
-	l_found boolean;
+    l_found boolean;
     l_ind integer;
     l_idx integer;
   begin
@@ -1624,23 +1629,23 @@ $END
     --
     l_idx := 1;
     l_ind := l_info.idx_cd;
-	l_found := false;
+    l_found := false;
     loop
       exit when not parse_central_file_header( p_zipped_blob, l_ind, l_cfh );
       if l_idx = p_idx
          or l_cfh.name1 = case when l_cfh.utf8 then l_utf8_name else l_name end
       then
         l_found := true;
-		exit;
-	  end if;
+        exit;
+      end if;
       l_ind := l_ind + l_cfh.len;
       l_idx := l_idx + 1;
     end loop;
-	--	
-	if not l_found
-	then
-	  return null;
-	end if;
+    --
+    if not l_found
+    then
+      return null;
+    end if;
     return parse_file( p_zipped_blob, l_cfh, p_password );
   end;
   --
@@ -1922,6 +1927,7 @@ $END
     l_n pls_integer;
     l_m pls_integer;
     l_buf raw(3999);
+    l_compressed_len integer;
     l_offs_dir_header integer;
     l_offs_end_header integer;
     l_comment raw(32767) := utl_raw.cast_to_raw( p_comment );
@@ -1932,11 +1938,13 @@ $END
       l_buf := dbms_lob.substr( p_zipped_blob, 30, l_offs );
       exit when c_LOCAL_FILE_HEADER != utl_raw.substr( l_buf, 1, 4 ) or nvl( utl_raw.length( l_buf ), 0 ) < 4;
       l_cnt := l_cnt + 1;
-      l_n := to_number( utl_raw.reverse( utl_raw.substr( l_buf, 27, 2 ) ), 'XXXX' );
-      l_m := to_number( utl_raw.reverse( utl_raw.substr( l_buf, 29, 2 ) ), 'XXXX' );
+      l_compressed_len := little_endian( l_buf, 19, 4 );
+      l_n := little_endian( l_buf, 27, 2 );
+      l_m := little_endian( l_buf, 29, 2 );
       dbms_lob.append( p_zipped_blob
                      , utl_raw.concat( c_CENTRAL_FILE_HEADER       -- Central directory file header signature
-                                     , hextoraw( '1400' )          -- version 2.0
+                                     , c_version
+                                     , hextoraw( '03' )            -- Unix
                                      , utl_raw.substr( l_buf, 5 )
                                      , hextoraw( '0000' )          -- File comment length
                                      , hextoraw( '0000' )          -- Disk number where file starts
@@ -1944,7 +1952,8 @@ $END
                                                                    --     0000 binary file
                                                                    --     0100 (ascii)text file
                                      , case
-                                         when dbms_lob.substr( p_zipped_blob
+                                         when l_compressed_len = 0
+                                          and dbms_lob.substr( p_zipped_blob
                                                              , 1
                                                              , l_offs + 30 + l_n - 1
                                                              ) in ( hextoraw( '2F' ) -- /
@@ -1971,7 +1980,7 @@ $END
                                                       )            -- File name + Extra field
                                      )
                      );
-      l_offs := l_offs + 30 + to_number( utl_raw.reverse( utl_raw.substr( l_buf, 19, 4 ) ), 'XXXXXXXX' )  -- compressed size
+      l_offs := l_offs + 30 + l_compressed_len
                             + l_n  -- File name length
                             + l_m; -- Extra field length
     end loop;
@@ -2135,12 +2144,12 @@ $END
       dbms_lob.append( p_zipped_blob, l_cd );
     end if;
     write_eocd( p_zipped_blob
-	          , l_info.zip64
-	          , l_nuo_entries
-	          , l_cd_len
-	          , l_data_len
-			  , l_info
-	          );
+              , l_info.zip64
+              , l_nuo_entries
+              , l_cd_len
+              , l_data_len
+              , l_info
+              );
     dbms_lob.freetemporary( l_data );
     dbms_lob.freetemporary( l_cd );
   end;
@@ -2157,6 +2166,7 @@ $END
     l_offs_lfh  integer;
     l_offs_cd   integer;
     l_len_cd    integer;
+    l_compressed_len integer;
     l_n pls_integer;
     l_m pls_integer;
     l_k pls_integer := 0;
@@ -2180,7 +2190,7 @@ $END
     dbms_lob.createtemporary( l_cd, true, c_lob_duration );
     dbms_lob.copy( l_cd, p_zipped_blob, dbms_lob.lobmaxsize, 1, l_info.idx_cd );
     dbms_lob.trim( p_zipped_blob, l_info.idx_cd - 1 );
-    add1file( l_data, p_name, p_content, p_password, p_date );    
+    add1file( l_data, p_name, p_content, p_password, p_date );
     dbms_lob.append( p_zipped_blob, l_data );
     l_offs_cd := l_offs_lfh + dbms_lob.getlength( l_data );
     --
@@ -2203,6 +2213,7 @@ $END
     end if;
     -- add new entry to Central Directory
     l_buf := dbms_lob.substr( l_data, 32767, 1 );
+    l_compressed_len := little_endian( l_buf, 19, 4 );
     l_n := little_endian( l_buf, 27, 2 );
     l_m := little_endian( l_buf, 29, 2 );
     if p_comment is not null
@@ -2221,14 +2232,16 @@ $END
       ( p_zipped_blob
       , 46
       , utl_raw.concat( c_CENTRAL_FILE_HEADER       -- Central directory file header signature
-                      , hextoraw( '1400' )          -- version 2.0
+                      , c_version
+                      , hextoraw( '03' )            -- Unix
                       , utl_raw.substr( l_buf, 5, 26 )
                       , little_endian( l_k, 2 )     -- File comment length
                       , hextoraw( '0000' )          -- Disk number where file starts
                       , hextoraw( '0000' )          -- Internal file attributes =>
                                                     --     0000 binary file
                                                     --     0100 (ascii)text file
-                      , case when substr( p_name, -1 ) in ( '/', '\' )
+                      , case when l_compressed_len = 0
+                              and substr( p_name, -1 ) in ( '/', '\' )
                           then hextoraw( '1000ff41' ) -- a directory/folder
                           else hextoraw( '0000ff81' ) -- a file
                         end                           -- External file attributes
@@ -2257,12 +2270,12 @@ $END
     end if;
     --
     write_eocd( p_zipped_blob
-	          , l_info.zip64
-	          , l_info.cnt + 1
-	          , l_len_cd
-	          , l_offs_cd
-			  , l_info
-	          );
+              , l_info.zip64
+              , l_info.cnt + 1
+              , l_len_cd
+              , l_offs_cd
+              , l_info
+              );
     --
     dbms_lob.freetemporary( l_data );
     dbms_lob.freetemporary( l_cd );
@@ -2274,7 +2287,7 @@ $END
     l_info tp_zip_info;
   begin
     get_zip_info( p_zipped_blob, l_info );
-	return nvl( l_info.cnt, 0 );
+    return nvl( l_info.cnt, 0 );
   end;
 --
   function get_comment( p_zipped_blob blob )
@@ -2282,16 +2295,44 @@ $END
   is
     l_info tp_zip_info;
   begin
-    get_zip_info( p_zipped_blob, l_info );
-	return get_64k_raw( l_info.comment1
+    get_zip_info( p_zipped_blob, l_info, true );
+    return get_64k_raw( l_info.comment1
                       , l_info.comment2
                       , l_info.comment3
                       );
   end;
 --
+  procedure set_comment
+    ( p_zipped_blob in out nocopy blob
+    , p_comment varchar2 character set any_cs := null
+    )
+  is
+    l_info tp_zip_info;
+    l_len pls_integer;
+    l_comment raw(32767);
+  begin
+    if p_zipped_blob is null
+    then
+      p_zipped_blob := hextoraw( '504B0506000000000000000000000000000000000000' );
+    end if;
+    get_zip_info( p_zipped_blob, l_info );
+    if p_comment is null
+    then
+      l_len := 0;
+    else
+      l_comment := utl_i18n.string_to_raw( p_comment, 'AL32UTF8' );
+      l_len := utl_raw.length( l_comment );
+    end if;
+    dbms_lob.trim( p_zipped_blob, l_info.idx_eocd + 19 );
+    dbms_lob.writeappend( p_zipped_blob
+                        , l_len + 2
+                        , utl_raw.concat( little_endian( l_len, 2 ), l_comment )
+                        );
+  end;
+--
   function get_file_info
     ( p_zipped_blob blob
-	, p_file_info in out file_info
+    , p_file_info in out file_info
     , p_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_encoding varchar2 := null
@@ -2342,25 +2383,28 @@ $END
       if l_idx = p_idx
          or l_cfh.name1 = case when l_cfh.utf8 then l_utf8_name else l_name end
       then
-	    p_file_info.found := true;
-	    p_file_info.idx := l_idx;
-	    p_file_info.len := l_cfh.original_len;
-		p_file_info.name := get_64k_raw( l_cfh.name1
+        p_file_info.found := true;
+        p_file_info.is_directory := l_cfh.original_len = 0
+                                and utl_raw.substr( l_cfh.external_file_attr, 1, 2 ) = '1000';
+        p_file_info.idx := l_idx;
+        p_file_info.len := l_cfh.original_len;
+        p_file_info.name := get_64k_raw( l_cfh.name1
                                        , l_cfh.name2
                                        , l_cfh.name3
-                                       ); 
-		p_file_info.comment := get_64k_raw( l_cfh.comment1
+                                       , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
+                                       );
+        p_file_info.comment := get_64k_raw( l_cfh.comment1
                                           , l_cfh.comment2
                                           , l_cfh.comment3
                                           );
-		exit;
+        exit;
       end if;
       l_ind := l_ind + l_cfh.len;
       l_idx := l_idx + 1;
     end loop;
     --
-	return p_file_info.found;
-  end;  
+    return p_file_info.found;
+  end;
 --
   function get_file_info
     ( p_zipped_blob blob
@@ -2374,11 +2418,11 @@ $END
     l_file_info file_info;
   begin
     l_dummy := get_file_info( p_zipped_blob
-	                        , l_file_info
-							, p_name
-							, p_idx
-							, p_encoding
-							);
+                            , l_file_info
+                            , p_name
+                            , p_idx
+                            , p_encoding
+                            );
 
     return l_file_info;
   end;
