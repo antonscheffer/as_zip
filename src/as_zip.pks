@@ -7,6 +7,8 @@ Author: Anton Scheffer
 ** Website: http://technology.amis.nl/blog
 **
 ** Changelog:
+**   Date: 27-09-2022
+**     Added set_comment, fixed get_comment
 **   Date: 10-09-2022
 **     add delete_file, add_file, get_count, get_comment and get_file_ino
 **     add character set any_cs to parameter p_file_name
@@ -66,7 +68,8 @@ THE SOFTWARE.
   --
   type file_info is record
     ( found boolean
-	, idx integer
+    , is_directory boolean
+    , idx integer
     , len pls_integer
     , name clob
     , comment clob
@@ -145,7 +148,7 @@ THE SOFTWARE.
 --
   function get_file_info
     ( p_zipped_blob blob
-	, p_file_info in out file_info
+    , p_file_info in out file_info
     , p_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_encoding varchar2 := null
@@ -166,6 +169,11 @@ THE SOFTWARE.
     , p_comment varchar2 character set any_cs := null
     , p_password varchar2 := null
     , p_date date := null
+    );
+--
+  procedure set_comment
+    ( p_zipped_blob in out nocopy blob
+    , p_comment varchar2 character set any_cs := null
     );
 --
 end;
