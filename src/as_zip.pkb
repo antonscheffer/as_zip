@@ -1646,7 +1646,7 @@ $END
     then
       return null;
     end if;
-    return parse_file( p_zipped_blob, l_cfh, p_password );
+    return parse_file( p_zipped_blob, l_cfh, utl_raw.cast_to_raw( p_password ) );
   end;
   --
   function get_file
