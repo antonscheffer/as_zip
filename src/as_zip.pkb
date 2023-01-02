@@ -1084,8 +1084,8 @@ $END
     l_m integer;
     l_crypto_2do integer;
     l_crypto_byte raw(1);
-    l_crypto_buf varchar2(32667);
-    c_crypto_sz constant pls_integer := 32766; -- size in bytes
+    l_crypto_buf varchar2(32767);
+    c_crypto_sz constant pls_integer := 16383; -- size in bytes
     l_crc raw(4);
 $IF as_zip.use_winzip_encryption
 $THEN
@@ -1251,7 +1251,7 @@ $END
         init_keys( p_password );
         l_crc := 'FFFFFFFF';
         l_crypto_2do := p_fh.compressed_len;
-        for i in 0 .. trunc( ( p_fh.compressed_len - 1 ) /  c_crypto_sz )
+        for i in 0 .. trunc( ( p_fh.compressed_len - 1 ) / c_crypto_sz )
         loop
           l_crypto_buf := dbms_lob.substr( p_zipped_blob, c_crypto_sz, p_fh.offset + 31 + l_n + l_m + i * c_crypto_sz );
           for j in 0 .. least( c_crypto_sz, l_crypto_2do ) - 1
@@ -1791,6 +1791,7 @@ $ELSE
         l_buf2 := l_buf2 || zipcrypto_encrypt( substr( l_buf, j * 2 - 1, 2 ) );
       end loop;
       dbms_lob.writeappend( l_rv, length( l_buf2 ) / 2, l_buf2 );
+      l_buf2 := null;      
     end loop;
     return l_rv;
 $END
