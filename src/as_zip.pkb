@@ -1214,12 +1214,12 @@ $END
           loop
 $IF as_zip.use_dbms_crypto
 $THEN
-    l_decrypted := dbms_crypto.encrypt( utl_raw.reverse( to_char( i + 1, 'fm' || lpad( 'X', 32, '0' ) ) )
+    l_decrypted := dbms_crypto.encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
                                       , dbms_crypto.ENCRYPT_AES + dbms_crypto.CHAIN_ECB + dbms_crypto.PAD_NONE
                                       , l_key
                                       );
 $ELSE
-    l_decrypted := aes_encrypt( utl_raw.reverse( to_char( i + 1, 'fm' || lpad( 'X', 32, '0' ) ) )
+    l_decrypted := aes_encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
                               , l_key_bits / 8
                               , l_aes_key
                               );
