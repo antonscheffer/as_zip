@@ -1209,7 +1209,7 @@ $END
         loop
           exit when l_crypto_2do <= 0;
           l_rv_buf := null;
-          l_crypto_buf := dbms_lob.substr( p_zipped_blob, least( 32752, l_crypto_2do ), l_idx );
+          l_crypto_buf := dbms_lob.substr( p_zipped_blob, least( 16368, l_crypto_2do ), l_idx );
           for i in 0 .. trunc( ( utl_raw.length( l_crypto_buf ) - 1 ) / 16 )
           loop
 $IF as_zip.use_dbms_crypto
@@ -1231,8 +1231,8 @@ $END
                                       );
             l_block# := l_block# + 1;
           end loop;
-          l_idx := l_idx + 32752;
-          l_crypto_2do := l_crypto_2do - 32752;
+          l_idx := l_idx + 16368;
+          l_crypto_2do := l_crypto_2do - 16368;
           dbms_lob.writeappend( l_rv, utl_raw.length( l_rv_buf ), l_rv_buf );
         end loop;
         if l_compression_method in ( '0800', '0900' )
