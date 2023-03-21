@@ -67,7 +67,7 @@ THE SOFTWARE.
 
   use_winzip_encryption constant boolean := true;
   use_dbms_crypto       constant boolean := false;
-  use_utl_file          constant boolean := true;
+  use_utl_file          constant boolean := false;
   --
   type file_list is table of clob;
   type file_names is table of varchar2(4000);
