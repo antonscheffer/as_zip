@@ -25,11 +25,14 @@ is
     , m   pls_integer
     , k   pls_integer
     , utf8 boolean
+    , encrypted boolean
     , crc32 raw(4)
     , external_file_attr raw(4)
-    , name1 raw( 32767 )
-    , name2 raw( 32767 )
-    , name3 raw( 100 )
+    , encoding varchar2(3999)
+    , idx   integer
+    , name1 raw(32767)
+    , name2 raw(32767)
+    , name3 raw(100)
     , zip64 boolean
     , zip64_offset pls_integer
     , comment1 raw(32767)
@@ -899,71 +902,58 @@ $END
     return to_number( utl_raw.reverse( utl_raw.substr( p_num, p_pos, p_bytes ) ), 'XXXXXXXXXXXXXXXX' );
   end;
   --
-  function get_64k_raw( p_raw1 raw, p_raw2 raw, p_raw3 raw, p_encoding varchar2 := 'AL32UTF8' )
+  function get_encoding( p_encoding in varchar2 := null )
+  return varchar2
+  is
+    l_encoding varchar2(32767);
+  begin
+    if p_encoding is not null
+    then
+      if nls_charset_id( p_encoding ) is null
+      then
+        l_encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
+      else
+        l_encoding := p_encoding;
+      end if;
+    end if;
+    return coalesce( l_encoding, 'US8PC437' ); -- IBM codepage 437
+  end;
+  --
+  function get_64k_raw( p_raw1 raw, p_raw2 raw, p_raw3 raw, p_encoding varchar2 := null )
   return clob
   is
     l_rv clob;
-    l_idx pls_integer;
-    --
-    function try_incomplete( p1 raw, p2 raw, p_idx out pls_integer )
-    return varchar2
-    is
-      l_tmp varchar2(32767);
-      l_len pls_integer;
-      l_scanned_len pls_integer;
-      l_shift_status pls_integer;
-    begin
-      p_idx := 1;
-      if p1 is null
-      then
-        return '';
-      end if;
-      begin
-        l_tmp := utl_i18n.raw_to_char( p1, p_encoding );
-      exception
-        when others then
-          if p2 is not null
-          then -- parsing errors with some incomplete charactes can be solved
-            l_len := utl_raw.length( p1 );
-            for i in reverse least( l_len - 10, 1 ) .. l_len - 1
-            loop
-              begin
-                l_shift_status := utl_i18n.shift_in;
-                l_tmp := utl_i18n.raw_to_char( utl_raw.substr( p1, 1, i ), p_encoding, l_scanned_len, l_shift_status );
-                for j in  1 .. 4
-                loop
-                  begin
-                    l_tmp := l_tmp || utl_i18n.raw_to_char( utl_raw.concat( utl_raw.substr( p1, l_scanned_len + 1 )
-                                                                          , utl_raw.substr( p2, 1, j )
-                                                                          )
-                                                          , p_encoding
-                                                          );
-                    p_idx := j + 1;
-                    exit;
-                  exception
-                    when others then null;
-                  end;
-                end loop;
-                exit;
-              exception
-                when others then null;
-              end;
-            end loop;
-          end if;
-      end;
-      return l_tmp;
-    end;
+    l_tmp blob;
+    l_dest_offset integer := 1;
+    l_src_offset  integer := 1;
+    l_context     integer := dbms_lob.default_lang_ctx;
+    l_warning     integer;
+    l_csid        integer := nls_charset_id( coalesce( p_encoding, 'CHAR_CS' ) );
   begin
-    l_idx := 1;
-    l_rv := try_incomplete( p_raw1, p_raw2, l_idx );
+    if p_raw1 is null
+    then
+      return null;
+    end if;
+    begin
+      if p_raw2 is null
+      then
+        return utl_i18n.raw_to_char( p_raw1, p_encoding );
+      end if;
+    exception
+      when others then null;
+    end;
+    l_tmp := p_raw1;
     if p_raw2 is not null
     then
-      l_rv := l_rv || try_incomplete( utl_raw.substr( p_raw2, l_idx ), p_raw3, l_idx );
+      dbms_lob.writeappend( l_tmp, utl_raw.length( p_raw2 ), p_raw2 );
       if p_raw3 is not null
       then
-        l_rv := l_rv || try_incomplete( utl_raw.substr( p_raw3, l_idx ), null, l_idx );
+        dbms_lob.writeappend( l_tmp, utl_raw.length( p_raw3 ), p_raw3 );
       end if;
     end if;
+    dbms_lob.createtemporary( l_rv, true );
+    dbms_lob.converttoclob( l_rv, l_tmp, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
+    dbms_lob.freetemporary( l_tmp );
     return l_rv;
   end;
   --
@@ -1302,7 +1292,7 @@ $END
       return l_rv;
     end if;
     raise_application_error( -20008, 'Unhandled compression method ' || l_compression_method );
-    end;
+  end;
   --
   function file2blob
     ( p_dir varchar2
@@ -1358,6 +1348,7 @@ $END
     p_cfh.external_file_attr := utl_raw.substr( l_buf, 39, 4 );
     p_cfh.len := 46 + p_cfh.n + p_cfh.m + p_cfh.k;
     --
+    p_cfh.encrypted := bitand( to_number( utl_raw.substr( l_buf, 9, 1 ), 'XX' ), 1 ) > 0;
     p_cfh.utf8 := bitand( to_number( utl_raw.substr( l_buf, 10, 1 ), 'XX' ), 8 ) > 0;
     if p_cfh.n > 0
     then
@@ -1508,6 +1499,66 @@ $END
     end if;
   end;
   --
+  procedure get_files
+    ( p_zipped_blob blob
+    , p_encoding    varchar2 := null
+    , p_start_entry integer  := null
+    , p_max_entries integer  := null
+    , p_list boolean
+    , p_file_list out  file_list
+    , p_file_names out file_names
+    )
+  is
+    l_info tp_zip_info;
+    l_cfh tp_cfh;
+    l_ind integer;
+    l_idx integer;
+    l_encoding varchar2(3999);
+    l_cnt pls_integer := 0;
+  begin
+    if p_list
+    then
+      p_file_list := file_list();
+    else
+      p_file_names := file_names();
+    end if;
+    --
+    get_zip_info( p_zipped_blob, l_info );
+    if nvl( l_info.cnt, 0 ) < 1
+    then -- no (zip) file or empty zip file
+      return;
+    end if;
+    --
+    l_encoding := get_encoding( p_encoding );
+    l_idx := 1;
+    l_ind := l_info.idx_cd;
+    loop
+      exit when nvl( p_start_entry, 1 ) - 1 + p_max_entries < l_idx
+                or not parse_central_file_header( p_zipped_blob, l_ind, l_cfh );
+      if l_idx >= nvl( p_start_entry, 1 )
+      then
+        l_cnt := l_cnt + 1;
+        if p_list
+        then
+          p_file_list.extend;
+          p_file_list( l_cnt ) := get_64k_raw( l_cfh.name1
+                                             , l_cfh.name2
+                                             , l_cfh.name3
+                                             , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
+                                             );
+        else
+          p_file_names.extend;
+          p_file_names( l_cnt ) := utl_i18n.raw_to_char( l_cfh.name1
+                                                        , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
+                                                        );
+        end if;
+      end if;
+      l_ind := l_ind + l_cfh.len;
+      l_idx := l_idx + 1;
+    end loop;
+    --
+  end;
+  --
   function get_file_list
     ( p_zipped_blob blob
     , p_encoding varchar2 := null
@@ -1516,50 +1567,19 @@ $END
     )
   return file_list
   is
-    l_info tp_zip_info;
-    l_cfh tp_cfh;
-    l_ind integer;
-    l_idx integer;
-    l_encoding varchar2(3999);
-    l_rv file_list;
+    l_file_list  file_list;
+    l_file_names file_names;
   begin
-    l_rv := file_list();
-    get_zip_info( p_zipped_blob, l_info );
-    if nvl( l_info.cnt, 0 ) < 1
-    then -- no (zip) file or empty zip file
-      return l_rv;
-    end if;
-    --
-    if p_encoding is not null
-    then
-      if nls_charset_id( p_encoding ) is null
-      then
-        l_encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
-      else
-        l_encoding := p_encoding;
-      end if;
-    end if;
-    l_encoding := nvl( l_encoding, 'US8PC437' ); -- IBM codepage 437
-    --
-    l_idx := 1;
-    l_ind := l_info.idx_cd;
-    loop
-      exit when nvl( p_start_entry, 1 ) - 1 + p_max_entries < l_idx
-                or not parse_central_file_header( p_zipped_blob, l_ind, l_cfh );
-      if l_idx >= nvl( p_start_entry, 1 )
-      then
-        l_rv.extend;
-        l_rv( l_rv.count ) := get_64k_raw( l_cfh.name1
-                                         , l_cfh.name2
-                                         , l_cfh.name3
-                                         , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
-                                         );
-      end if;
-      l_ind := l_ind + l_cfh.len;
-      l_idx := l_idx + 1;
-    end loop;
-    --
-    return l_rv;
+    get_files
+      ( p_zipped_blob
+      , p_encoding
+      , p_start_entry
+      , p_max_entries
+      , true
+      , l_file_list
+      , l_file_names
+      );
+    return l_file_list;
   end;
   --
   function get_file_list
@@ -1575,74 +1595,129 @@ $END
     return get_file_list( file2blob( p_dir, p_zip_file ), p_encoding, p_start_entry, p_max_entries );
   end;
   --
+  function get_file_names
+    ( p_zipped_blob blob
+    , p_encoding    varchar2 := null
+    , p_start_entry integer := null
+    , p_max_entries integer := null
+    )
+  return file_names
+  is
+    l_file_list  file_list;
+    l_file_names file_names;
+  begin
+    get_files
+      ( p_zipped_blob
+      , p_encoding
+      , p_start_entry
+      , p_max_entries
+      , false
+      , l_file_list
+      , l_file_names
+      );
+    return l_file_names;
+  end;
+  --
+  function get_file_names
+    ( p_dir varchar2
+    , p_zip_file varchar2
+    , p_encoding varchar2 := null
+    , p_start_entry integer := null
+    , p_max_entries integer := null
+    )
+  return file_names
+  is
+  begin
+    return get_file_names( file2blob( p_dir, p_zip_file ), p_encoding, p_start_entry, p_max_entries );
+  end;
+  --
+  function get_central_file_header
+    ( p_zip      blob
+    , p_name     varchar2 character set any_cs
+    , p_idx      number
+    , p_encoding varchar2
+    , p_cfh      out tp_cfh
+    )
+  return boolean
+  is
+    l_rv        boolean;
+    l_ind       integer;
+    l_idx       integer;
+    l_info      tp_zip_info;
+    l_name      raw(32767);
+    l_utf8_name raw(32767);
+    l_charset   varchar2(1000);
+  begin
+    if p_name is null and p_idx is null
+    then
+      return false;
+    end if;
+    get_zip_info( p_zip, l_info, true );
+    if nvl( l_info.cnt, 0 ) < 1
+    then -- no (zip) file or empty zip file
+      return false;
+    end if;
+    --
+    if p_name is not null
+    then
+      l_charset := case when isnchar( p_name ) then 'N' end || 'CHAR_CS';
+      l_charset := nls_charset_name( nls_charset_id( l_charset ) );
+      l_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
+                               , get_encoding( p_encoding )
+                               , l_charset
+                               );
+--      l_name := utl_i18n.string_to_raw( p_name, p_cfh.encoding );
+      l_utf8_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
+                                    , 'AL32UTF8'
+                                    , l_charset
+                                    );
+    end if;
+    --
+    l_rv := false;
+    l_ind := l_info.idx_cd;
+    l_idx := 1;
+    loop
+      exit when not parse_central_file_header( p_zip, l_ind, p_cfh, true );
+      if l_idx = p_idx
+         or p_cfh.name1 = case when p_cfh.utf8 then l_utf8_name else l_name end
+      then
+        l_rv := true;
+        exit;
+      end if;
+      l_ind := l_ind + p_cfh.len;
+      l_idx := l_idx + 1;
+    end loop;
+    --
+    p_cfh.idx := l_idx;
+    p_cfh.encoding := get_encoding( p_encoding );
+    return l_rv;
+  end;
+  --
   function get_file
     ( p_zipped_blob blob
     , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
-    , p_nfile_name nvarchar2 := null
+    , p_nfile_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_password varchar2 := null
     )
   return blob
   is
-    l_encoding varchar2(3999);
-    l_name raw(32767);
-    l_utf8_name raw(32767);
-    l_info tp_zip_info;
     l_cfh tp_cfh;
-    l_found boolean;
-    l_ind integer;
-    l_idx integer;
   begin
-    if p_file_name is null and p_idx is null and p_nfile_name is null
-    then
-      return null;
-    end if;
-    get_zip_info( p_zipped_blob, l_info );
-    if nvl( l_info.cnt, 0 ) < 1
-    then -- no (zip) file or empty zip file
-      return null;
-    end if;
-    --
-    if p_file_name is not null or p_nfile_name is not null
-    then
-      if p_encoding is not null
-      then
-        if nls_charset_id( p_encoding ) is null
-        then
-          l_encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
-        else
-          l_encoding := p_encoding;
-        end if;
-      else
-        l_encoding := 'US8PC437';
-      end if;
-      if p_file_name is not null or p_nfile_name is not null
-      then
-        l_name := utl_i18n.string_to_raw( p_file_name, l_encoding );
-        l_utf8_name := utl_i18n.string_to_raw( p_file_name, 'AL32UTF8' );
-      else
-        l_name := utl_i18n.string_to_raw( p_nfile_name, l_encoding );
-        l_utf8_name := utl_i18n.string_to_raw( p_nfile_name, 'AL32UTF8' );
-      end if;
-    end if;
-    --
-    l_idx := 1;
-    l_ind := l_info.idx_cd;
-    l_found := false;
-    loop
-      exit when not parse_central_file_header( p_zipped_blob, l_ind, l_cfh );
-      if l_idx = p_idx
-         or l_cfh.name1 = case when l_cfh.utf8 then l_utf8_name else l_name end
-      then
-        l_found := true;
-        exit;
-      end if;
-      l_ind := l_ind + l_cfh.len;
-      l_idx := l_idx + 1;
-    end loop;
-    --
-    if not l_found
+    if not (  get_central_file_header( p_zipped_blob
+                                     , p_file_name
+                                     , p_idx
+                                     , p_encoding
+                                     , l_cfh
+                                     )
+           or get_central_file_header( p_zipped_blob
+                                     , p_nfile_name
+                                     , p_idx
+                                     , p_encoding
+                                     , l_cfh
+                                     )
+           )
     then
       return null;
     end if;
@@ -1654,7 +1729,7 @@ $END
     , p_zip_file varchar2
     , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
-    , p_nfile_name nvarchar2 := null
+    , p_nfile_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_password varchar2 := null
     )
@@ -1664,7 +1739,7 @@ $END
     return get_file( file2blob( p_dir, p_zip_file ), p_file_name, p_encoding, p_nfile_name, p_idx, p_password );
   end;
   --
-  function encrypt( p_pw varchar2, p_src blob, p_crc32 raw )
+  function encrypt( p_pw varchar2, p_src blob, p_crc32 raw, p_zipcrypto boolean)
   return blob
   is
     l_rv blob;
@@ -1688,7 +1763,7 @@ $THEN
 $ELSE
     l_aes_key tp_aes_tab;
 $END
-$ELSE
+$END
   l_buf varchar2(32767);
   l_buf2 varchar2(32767);
   --
@@ -1700,10 +1775,35 @@ $ELSE
     update_keys( p_chr );
     return l_tmp;
   end;
-$END
   begin
 $IF as_zip.use_winzip_encryption
 $THEN
+   if p_zipcrypto
+   then
+$END
+    init_zipcrypto_tab;
+    init_keys( l_pw );
+    for i in 1 .. 11
+    loop
+      l_buf2 := l_buf2 || zipcrypto_encrypt( to_char( trunc( dbms_random.value( 0, 256 ) ), 'fmXX' ) );
+    end loop;
+    l_buf2 := l_buf2 || zipcrypto_encrypt( utl_raw.substr( p_crc32, 4, 1 ) );
+    dbms_lob.createtemporary( l_rv, true, c_lob_duration );
+    for i in 0 .. trunc( ( dbms_lob.getlength( p_src ) - 1 ) / 16370 )
+    loop
+      l_buf := dbms_lob.substr( p_src, 16370, i * 16370 + 1 );
+      for j in 1 ..  length( l_buf ) / 2
+      loop
+        l_buf2 := l_buf2 || zipcrypto_encrypt( substr( l_buf, j * 2 - 1, 2 ) );
+      end loop;
+      dbms_lob.writeappend( l_rv, length( l_buf2 ) / 2, l_buf2 );
+      l_buf2 := null;
+    end loop;
+    return l_rv;
+$IF as_zip.use_winzip_encryption
+$THEN
+   end if;
+$END
 $IF as_zip.use_dbms_crypto
 $THEN
     l_salt := dbms_crypto.randombytes( l_key_bits / 16 );
@@ -1774,35 +1874,15 @@ $END
     dbms_lob.freetemporary( l_tmp );
     dbms_lob.writeappend( l_rv, 10, l_mac );
     return l_rv;
-$ELSE
-    init_zipcrypto_tab;
-    init_keys( l_pw );
-    for i in 1 .. 11
-    loop
-      l_buf2 := l_buf2 || zipcrypto_encrypt( to_char( trunc( dbms_random.value( 0, 256 ) ), 'fmXX' ) );
-    end loop;
-    l_buf2 := l_buf2 || zipcrypto_encrypt( utl_raw.substr( p_crc32, 4, 1 ) );
-    dbms_lob.createtemporary( l_rv, true, c_lob_duration );
-    for i in 0 .. trunc( ( dbms_lob.getlength( p_src ) - 1 ) / 16370 )
-    loop
-      l_buf := dbms_lob.substr( p_src, 16370, i * 16370 + 1 );
-      for j in 1 ..  length( l_buf ) / 2
-      loop
-        l_buf2 := l_buf2 || zipcrypto_encrypt( substr( l_buf, j * 2 - 1, 2 ) );
-      end loop;
-      dbms_lob.writeappend( l_rv, length( l_buf2 ) / 2, l_buf2 );
-      l_buf2 := null;      
-    end loop;
-    return l_rv;
-$END
   end;
 --
   procedure add1file
     ( p_zipped_blob in out nocopy blob
-    , p_name varchar2 character set any_cs
-    , p_content blob
-    , p_password varchar2 := null
-    , p_date date := null
+    , p_name      varchar2 character set any_cs
+    , p_content   blob
+    , p_password  varchar2 := null
+    , p_date      date     := null
+    , p_zipcrypto boolean  := null
     )
   is
     l_now date;
@@ -1841,16 +1921,19 @@ $END
     if p_password is not null and l_len > 0
     then
       l_encrypted := true;
-      l_blob := encrypt( p_password, l_blob, l_crc32 );
+      l_blob := encrypt( p_password, l_blob, l_crc32, p_zipcrypto );
       l_clen := dbms_lob.getlength( l_blob );
 $IF as_zip.use_winzip_encryption
 $THEN
-      l_crc32 := hextoraw( '00000000' );
-      l_extra := hextoraw( '019907000200414503' || case when l_compressed
-                                                     then '0800' -- deflate
-                                                     else '0000' -- stored
-                                                   end
-                         );
+      if not nvl( p_zipcrypto, false )
+      then
+        l_crc32 := hextoraw( '00000000' );
+        l_extra := hextoraw( '019907000200414503' || case when l_compressed
+                                                       then '0800' -- deflate
+                                                       else '0000' -- stored
+                                                     end
+                           );
+      end if;
 $END
     end if;
     l_name := utl_i18n.string_to_raw( p_name, 'AL32UTF8' );
@@ -1859,7 +1942,13 @@ $END
                                    , case when l_encrypted
 $IF as_zip.use_winzip_encryption
 $THEN
-                                       then hextoraw( '330001' ) -- version 5.1, encrypted
+                                       then
+                                         case when p_zipcrypto
+                                           then
+                                             hextoraw( '140001' ) -- version 2.0, encrypted
+                                           else
+                                             hextoraw( '330001' ) -- version 5.1, encrypted
+                                         end
 $ELSE
                                        then hextoraw( '140001' ) -- version 2.0, encrypted
 $END
@@ -1871,7 +1960,7 @@ $END
                                      end
 $IF as_zip.use_winzip_encryption
 $THEN
-                                   , case when l_encrypted
+                                   , case when l_encrypted and not nvl( p_zipcrypto, false )
                                        then '6300' -- AE-x encryption marker
                                        else
                                          case when l_compressed
@@ -2006,6 +2095,8 @@ $END
     , p_filename varchar2
     )
   is
+$IF as_zip.use_utl_file
+$THEN
     l_fh utl_file.file_type;
     l_sz pls_integer := 32767;
   begin
@@ -2018,6 +2109,10 @@ $END
       end loop;
     end if;
     utl_file.fclose( l_fh );
+$ELSE
+  begin
+    raise_application_error( -20024, 'as_zip.save_zip/utl_file not available.' );
+$END
   end;
   --
   procedure delete_file
@@ -2037,7 +2132,7 @@ $END
     l_cd_len integer;
     l_data_len integer;
     l_buf raw(32767);
-    l_encoding varchar2(3999);
+    l_charset varchar2(3999);
     l_name raw(32767);
     l_utf8_name raw(32767);
     l_cd   blob;
@@ -2055,21 +2150,31 @@ $END
       return;
     end if;
     --
+    if p_encoding is not null
+    then
+      if nls_charset_id( p_encoding ) is null
+      then
+        l_cfh.encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
+      else
+        l_cfh.encoding := p_encoding;
+      end if;
+    else
+      l_cfh.encoding := 'US8PC437';
+    end if;
+    --
     if p_name is not null
     then
-      if p_encoding is not null
-      then
-        if nls_charset_id( p_encoding ) is null
-        then
-          l_encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
-        else
-          l_encoding := p_encoding;
-        end if;
-      else
-        l_encoding := 'US8PC437';
-      end if;
-      l_name := utl_i18n.string_to_raw( p_name, l_encoding );
-      l_utf8_name := utl_i18n.string_to_raw( p_name, 'AL32UTF8' );
+      l_charset := case when isnchar( p_name ) then 'N' end || 'CHAR_CS';
+      l_charset := nls_charset_name( nls_charset_id( l_charset ) );
+      l_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
+                               , l_cfh.encoding
+                               , l_charset
+                               );
+--      l_name := utl_i18n.string_to_raw( p_name, l_cfh.encoding );
+      l_utf8_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
+                                    , 'AL32UTF8'
+                                    , l_charset
+                                    );
     end if;
     --
     l_ind := l_info.idx_cd;
@@ -2157,11 +2262,12 @@ $END
   --
   procedure add_file
     ( p_zipped_blob in out nocopy blob
-    , p_name varchar2 character set any_cs
-    , p_content blob
-    , p_comment varchar2 character set any_cs := null
-    , p_password varchar2 := null
-    , p_date date := null
+    , p_name      varchar2 character set any_cs
+    , p_content   blob
+    , p_comment   varchar2 character set any_cs := null
+    , p_password  varchar2 := null
+    , p_date      date     := null
+    , p_zipcrypto boolean  := null
     )
   is
     l_offs_lfh  integer;
@@ -2191,7 +2297,7 @@ $END
     dbms_lob.createtemporary( l_cd, true, c_lob_duration );
     dbms_lob.copy( l_cd, p_zipped_blob, dbms_lob.lobmaxsize, 1, l_info.idx_cd );
     dbms_lob.trim( p_zipped_blob, l_info.idx_cd - 1 );
-    add1file( l_data, p_name, p_content, p_password, p_date );
+    add1file( l_data, p_name, p_content, p_password, p_date, p_zipcrypto );
     dbms_lob.append( p_zipped_blob, l_data );
     l_offs_cd := l_offs_lfh + dbms_lob.getlength( l_data );
     --
@@ -2330,7 +2436,7 @@ $END
                         , utl_raw.concat( little_endian( l_len, 2 ), l_comment )
                         );
   end;
---
+  --
   function get_file_info
     ( p_zipped_blob blob
     , p_file_info in out file_info
@@ -2340,69 +2446,38 @@ $END
     )
   return boolean
   is
-    l_info tp_zip_info;
     l_cfh tp_cfh;
-    l_idx integer;
-    l_ind integer;
-    l_name raw(32767);
-    l_utf8_name raw(32767);
-    l_encoding varchar2(3999);
   begin
     p_file_info := null;
-    p_file_info.found := false;
-    if p_name is null and p_idx is null
+    p_file_info.found := get_central_file_header( p_zipped_blob
+                                                , p_name
+                                                , p_idx
+                                                , p_encoding
+                                                , l_cfh
+                                                );
+    if p_file_info.found
     then
-      return false;
+      p_file_info.found := true;
+      p_file_info.is_encrypted := l_cfh.encrypted;
+      p_file_info.is_directory := l_cfh.original_len = 0
+                              and utl_raw.substr( l_cfh.external_file_attr, 1, 2 ) = '1000';
+      p_file_info.idx  := l_cfh.idx;
+      p_file_info.len  := l_cfh.original_len;
+      p_file_info.clen := l_cfh.compressed_len;
+      p_file_info.name := get_64k_raw( l_cfh.name1
+                                     , l_cfh.name2
+                                     , l_cfh.name3
+                                     , case when l_cfh.utf8 then 'AL32UTF8' else l_cfh.encoding end
+                                     );
+      p_file_info.comment := get_64k_raw( l_cfh.comment1
+                                        , l_cfh.comment2
+                                        , l_cfh.comment3
+                                        , case when l_cfh.utf8 then 'AL32UTF8' end
+                                        );
+      p_file_info.nname := utl_i18n.raw_to_nchar( l_cfh.name1
+                                                , case when l_cfh.utf8 then 'AL32UTF8' else l_cfh.encoding end
+                                                );
     end if;
-    get_zip_info( p_zipped_blob, l_info, true );
-    if nvl( l_info.cnt, 0 ) < 1
-    then -- no (zip) file or empty zip file
-      return false;
-    end if;
-    --
-    if p_name is not null
-    then
-      if p_encoding is not null
-      then
-        if nls_charset_id( p_encoding ) is null
-        then
-          l_encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
-        else
-          l_encoding := p_encoding;
-        end if;
-      else
-        l_encoding := 'US8PC437';
-      end if;
-      l_name := utl_i18n.string_to_raw( p_name, l_encoding );
-      l_utf8_name := utl_i18n.string_to_raw( p_name, 'AL32UTF8' );
-    end if;
-    --
-    l_ind := l_info.idx_cd;
-    l_idx := 1;
-    loop
-      exit when not parse_central_file_header( p_zipped_blob, l_ind, l_cfh, true );
-      if l_idx = p_idx
-         or l_cfh.name1 = case when l_cfh.utf8 then l_utf8_name else l_name end
-      then
-        p_file_info.found := true;
-        p_file_info.is_directory := l_cfh.original_len = 0
-                                and utl_raw.substr( l_cfh.external_file_attr, 1, 2 ) = '1000';
-        p_file_info.idx := l_idx;
-        p_file_info.len := l_cfh.original_len;
-        p_file_info.name := get_64k_raw( l_cfh.name1
-                                       , l_cfh.name2
-                                       , l_cfh.name3
-                                       , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
-                                       );
-        p_file_info.comment := get_64k_raw( l_cfh.comment1
-                                          , l_cfh.comment2
-                                          , l_cfh.comment3
-                                          );
-        exit;
-      end if;
-      l_ind := l_ind + l_cfh.len;
-      l_idx := l_idx + 1;
-    end loop;
     --
     return p_file_info.found;
   end;
@@ -2424,9 +2499,228 @@ $END
                             , p_idx
                             , p_encoding
                             );
-
     return l_file_info;
   end;
 --
+  procedure add_csv
+    ( p_zipped_blob in out nocopy blob
+    , p_cursor      in out sys_refcursor
+    , p_name           varchar2 character set any_cs
+    , p_comment        varchar2 character set any_cs := null
+    , p_password       varchar2 := null
+    , p_date           date     := null
+    , p_separator      varchar2 := ','
+    , p_enclosed_by    varchar2 := '"'
+    , p_newline        varchar2 := null
+    , p_column_headers boolean  := null
+    , p_bulk_size      pls_integer := null
+    , p_encoding       varchar2 := null
+    , p_zipcrypto      boolean  := null
+    )
+  is
+    l_c   integer;
+    l_csv clob;
+    l_csv_blob blob;
+    l_col_cnt integer;
+    l_desc_tab dbms_sql.desc_tab2;
+    v_tab dbms_sql.varchar2_table;
+    c_tab dbms_sql.clob_table;
+    l_first pls_integer;
+    l_r integer;
+    l_cnt pls_integer;
+    c_bulk_size constant pls_integer   := nvl( p_bulk_size, 200 );
+    c_separator constant varchar2(100) := nvl( substr( p_separator, 1, 100 ), ',' );
+    c_newline   constant varchar2(10)  := nvl( p_newline, chr(13) || chr(10) );
+    l_last_col pls_integer;
+    l_dest_offset integer := 1;
+    l_src_offset  integer := 1;
+    l_context     integer := dbms_lob.default_lang_ctx;
+    l_warning     integer;
+    l_csid        integer := nls_charset_id( coalesce( p_encoding, 'CHAR_CS' ) );
+    --
+    procedure append( p_val varchar2, p_sep boolean )
+    is
+    begin
+      if p_enclosed_by is null
+      then
+        l_csv := l_csv || ( p_val || case when p_sep then c_separator else c_newline end );
+      else
+        l_csv := l_csv || (  p_enclosed_by
+                          || replace( p_val, p_enclosed_by, p_enclosed_by || p_enclosed_by )
+                          || p_enclosed_by
+                          || case when p_sep then c_separator else c_newline end
+                          );
+      end if;
+    end;
+    --
+    procedure append_clob( p_val clob, p_sep boolean )
+    is
+    begin
+      if p_enclosed_by is null
+      then
+        l_csv := l_csv || ( p_val || case when p_sep then c_separator else c_newline end );
+      else
+        l_csv := l_csv || (  p_enclosed_by
+                          || replace( p_val, p_enclosed_by, p_enclosed_by || p_enclosed_by )
+                          || p_enclosed_by
+                          || case when p_sep then c_separator else c_newline end
+                          );
+      end if;
+    end;
+  begin
+    l_c := dbms_sql.to_cursor_number( p_cursor );
+    dbms_lob.createtemporary( l_csv, true, c_lob_duration );
+    dbms_sql.describe_columns2( l_c, l_col_cnt, l_desc_tab );
+    for c in 1 .. l_col_cnt
+    loop
+      if l_desc_tab( c ).col_type in ( 2, 100, 101
+                                     , 12, 180, 181, 231
+                                     , 1, 9, 96
+                                     , 112
+                                     , 182, 183
+                                     )
+      then
+        l_last_col := c;
+      end if;
+    end loop;
+    for c in 1 .. l_col_cnt
+    loop
+      if (   p_column_headers
+         and l_desc_tab( c ).col_type in ( 2   -- number
+                                         , 100 -- bfloat
+                                         , 101 -- bdouble
+                                         , 12  -- date
+                                         , 180 -- timestamp
+                                         , 181 -- timestamp with timezone
+                                         , 231 -- timestamp with local timezone
+                                         , 1   -- varchar
+                                         , 9   -- varchar2
+                                         , 96  -- char
+--                                         , 8   -- long
+                                         , 112 -- clob
+                                         , 182 -- interval year to month
+                                         , 183 -- interval day to second
+                                         )
+         )
+      then
+        append( l_desc_tab( c ).col_name, c < l_last_col );
+      end if;
+      case
+        when l_desc_tab( c ).col_type in ( 2, 100, 101
+                                         , 12, 180, 181, 231
+                                         , 1, 9, 96
+                                         , 182, 183
+                                         )
+        then
+          dbms_sql.define_array( l_c, c, v_tab, c_bulk_size, 1 );
+        when l_desc_tab( c ).col_type in ( 112 )
+        then
+          dbms_sql.define_array( l_c, c, c_tab, c_bulk_size, 1 );
+        else
+          null;
+      end case;
+    end loop;
+    --
+    l_cnt := 0;
+    loop
+      l_r := dbms_sql.fetch_rows( l_c );
+      if l_r > 0
+      then
+        l_cnt := l_cnt + l_r;
+        for c in 1 .. l_col_cnt
+        loop
+          case
+            when l_desc_tab( c ).col_type in ( 2, 100, 101
+                                             , 12, 180, 181, 231
+                                             , 1, 9, 96
+                                             , 182, 183
+                                             )
+            then
+              dbms_sql.column_value( l_c, c, v_tab );
+              l_first := v_tab.first;
+              for i in 0 .. l_r - 1
+              loop
+                append( v_tab( i + l_first ), c < l_last_col );
+              end loop;
+              v_tab.delete;
+            when l_desc_tab( c ).col_type in ( 8, 112 )
+            then
+              dbms_sql.column_value( l_c, c, c_tab );
+              l_first := c_tab.first;
+              for i in 0 .. l_r - 1
+              loop
+                append_clob( c_tab( i + l_first ), c < l_last_col );
+              end loop;
+              v_tab.delete;
+            else
+              null;
+          end case;
+        end loop;
+      end if;
+      exit when l_r != c_bulk_size;
+    end loop;
+    dbms_sql.close_cursor( l_c );
+    --
+    dbms_lob.createtemporary( l_csv_blob, true, c_lob_duration );
+    dbms_lob.converttoblob( l_csv_blob, l_csv, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
+
+    add_file
+      ( p_zipped_blob
+      , p_name
+      , l_csv_blob
+      , p_comment
+      , p_password
+      , p_date
+      , p_zipcrypto
+      );
+    --
+    dbms_lob.freetemporary( l_csv );
+  exception
+    when value_error
+    then
+      if dbms_sql.is_open( l_c )
+      then
+        dbms_sql.close_cursor( l_c );
+      end if;
+      if dbms_lob.istemporary( l_csv ) = 1
+      then
+        dbms_lob.freetemporary( l_csv );
+      end if;
+      if dbms_lob.istemporary( l_csv_blob ) = 1
+      then
+        dbms_lob.freetemporary( l_csv_blob );
+      end if;
+      raise;
+  end add_csv;
+--
+end;
+/
+
+declare
+  l_zip blob;
+  l_txt clob;
+  l_txt_blob blob;
+  l_dest_offset integer := 1;
+  l_src_offset  integer := 1;
+  l_context     integer := dbms_lob.default_lang_ctx;
+  l_warning     integer;
+  l_csid        integer := nls_charset_id( 'CHAR_CS' );
+begin
+  dbms_lob.createtemporary( l_txt, true );
+  for i in 1 .. 1000
+  loop
+    l_txt := l_txt || ( 'line ' || i || ': some easy to compress text on this line' || chr(13) || chr(10) );
+  end loop;
+  dbms_lob.createtemporary( l_txt_blob, true );
+  dbms_lob.converttoblob( l_txt_blob, l_txt, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
+  --
+  as_zip.add1file( l_zip, 'file1.txt', l_txt_blob );
+  as_zip.finish_zip( l_zip, 'Zipfile containing one file with unpressed size of ' || dbms_lob.getlength( l_txt_blob ) || '  bytes' );
+  --
+  dbms_lob.freetemporary( l_txt );
+  dbms_lob.freetemporary( l_txt_blob );
+  --
+  as_zip.save_zip( l_zip, 'VAGRANT', 'zip2.zip' );
+  dbms_lob.freetemporary( l_zip );
 end;
 /
