@@ -62,7 +62,7 @@ begin
   as_zip.save_zip( l_zip, 'VAGRANT', 'zip2.zip' );
   dbms_lob.freetemporary( l_zip );
 end;</code></pre>
-Or use one or more times as_zip.add_file. as_zip.add_file always leaves a valid and complete zip-file and can be used to add a file to anexisting zip-file.
+Or use one or more times as_zip.add_file. as_zip.add_file always leaves a valid and complete zip-file and can be used to add a file to an existing zip-file.
 
 <pre><code>declare
   l_zip blob;
