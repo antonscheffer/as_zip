@@ -96,3 +96,20 @@ begin
   as_zip.save_zip( l_zip, 'VAGRANT', 'zip3.zip' );
   dbms_lob.freetemporary( l_zip );
 end;</code></pre>
+Or use as_zip.add_csv to add a csv-file, based on a sys_refcursor
+<pre><code>declare
+  l_zip blob;
+  l_rc sys_refcursor;
+begin
+  for f in 1 .. 5
+  loop
+    open l_rc for
+      select level r, 'test "' || level l, sysdate + level n
+      from dual connect by level <= f;
+    --
+    as_zip.add_csv( l_zip, l_rc, 'file' || f || '.csv', 'This is csv-file ' || f );
+  end loop;
+  --
+  as_zip.save_zip( l_zip, 'VAGRANT', 'zip4.zip' );
+  dbms_lob.freetemporary( l_zip );
+end;</code></pre>
