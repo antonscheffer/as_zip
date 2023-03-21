@@ -4,13 +4,17 @@ is
 **
 Author: Anton Scheffer
 ** Date: 25-01-2012
-** Website: http://technology.amis.nl/blog
 **
 ** Changelog:
+**   Date: 18-03-2023
+**     Added get_file_names
+**     Added add_csv
+**   Date: 29-12-2022
+**     fixed decryption of encrypted files
 **   Date: 27-09-2022
 **     Added set_comment, fixed get_comment
 **   Date: 10-09-2022
-**     add delete_file, add_file, get_count, get_comment and get_file_ino
+**     add delete_file, add_file, get_count, get_comment and get_file_info
 **     add character set any_cs to parameter p_file_name
 **        this makes p_nfile_name obsolete
 **   Date: 17-05-2022 shredder2003
@@ -62,75 +66,104 @@ THE SOFTWARE.
 ******************************************** */
 
   use_winzip_encryption constant boolean := true;
-  use_dbms_crypto       constant boolean := true;
+  use_dbms_crypto       constant boolean := false;
+  use_utl_file          constant boolean := true;
   --
   type file_list is table of clob;
+  type file_names is table of varchar2(4000);
   --
   type file_info is record
-    ( found boolean
+    ( found        boolean
     , is_directory boolean
-    , idx integer
-    , len pls_integer
-    , name clob
+    , is_encrypted boolean
+    , idx     integer
+    , len     integer
+    , clen    integer
+    , name    clob
     , comment clob
+    , nname   nvarchar2(32767)
     );
   --
   function get_file_list
     ( p_zipped_blob blob
-    , p_encoding varchar2 := null
+    , p_encoding    varchar2 := null
     , p_start_entry integer := null
     , p_max_entries integer := null
     )
   return file_list;
   --
   function get_file_list
-    ( p_dir varchar2
-    , p_zip_file varchar2
-    , p_encoding varchar2 := null
+    ( p_dir         varchar2
+    , p_zip_file    varchar2
+    , p_encoding    varchar2 := null
     , p_start_entry integer := null
     , p_max_entries integer := null
     )
   return file_list;
   --
+  function get_file_names
+    ( p_zipped_blob blob
+    , p_encoding    varchar2 := null
+    , p_start_entry integer := null
+    , p_max_entries integer := null
+    )
+  return file_names;
+  --
+  function get_file_names
+    ( p_dir         varchar2
+    , p_zip_file    varchar2
+    , p_encoding    varchar2 := null
+    , p_start_entry integer := null
+    , p_max_entries integer := null
+    )
+  return file_names;
+  --
   function get_file
     ( p_zipped_blob blob
-    , p_file_name varchar2 character set any_cs := null
-    , p_encoding varchar2 := null
-    , p_nfile_name nvarchar2 := null
-    , p_idx number := null
-    , p_password varchar2 := null
+    , p_file_name   varchar2 character set any_cs := null
+    , p_encoding    varchar2 := null
+    , p_nfile_name  varchar2 character set any_cs := null
+    , p_idx         number := null
+    , p_password    varchar2 := null
     )
   return blob;
   --
   function get_file
-    ( p_dir varchar2
-    , p_zip_file varchar2
-    , p_file_name varchar2 character set any_cs := null
-    , p_encoding varchar2 := null
-    , p_nfile_name nvarchar2 := null
-    , p_idx number := null
-    , p_password varchar2 := null
+    ( p_dir        varchar2
+    , p_zip_file   varchar2
+    , p_file_name  varchar2 character set any_cs := null
+    , p_encoding   varchar2 := null
+    , p_nfile_name varchar2 character set any_cs := null
+    , p_idx        number := null
+    , p_password   varchar2 := null
     )
   return blob;
   --
   procedure add1file
     ( p_zipped_blob in out nocopy blob
-    , p_name varchar2 character set any_cs
-    , p_content blob
-    , p_password varchar2 := null
-    , p_date date := null
+    , p_name      varchar2 character set any_cs
+    , p_content   blob
+    , p_password  varchar2 := null
+    , p_date      date     := null
+    , p_zipcrypto boolean  := null
     );
 --
-  procedure finish_zip(
-      p_zipped_blob in out nocopy blob
-     ,p_comment varchar2 default null
-  );
+  procedure finish_zip
+    ( p_zipped_blob in out nocopy blob
+    , p_comment varchar2 default null
+    );
 --
   procedure save_zip
     ( p_zipped_blob blob
-    , p_dir varchar2
-    , p_filename varchar2
+    , p_dir         varchar2
+    , p_filename    varchar2
     );
+--
+  function file2blob
+    ( p_dir varchar2
+    , p_file_name varchar2
+    )
+  return blob;
 --
   function get_count( p_zipped_blob blob )
   return integer;
@@ -140,35 +173,52 @@ THE SOFTWARE.
 --
   function get_file_info
     ( p_zipped_blob blob
-    , p_name varchar2 character set any_cs := null
-    , p_idx number := null
-    , p_encoding varchar2 := null
+    , p_name        varchar2 character set any_cs := null
+    , p_idx         number := null
+    , p_encoding    varchar2 := null
     )
   return file_info;
 --
   function get_file_info
     ( p_zipped_blob blob
     , p_file_info in out file_info
-    , p_name varchar2 character set any_cs := null
-    , p_idx number := null
-    , p_encoding varchar2 := null
+    , p_name        varchar2 character set any_cs := null
+    , p_idx         number := null
+    , p_encoding    varchar2 := null
     )
   return boolean;
 --
   procedure delete_file
     ( p_zipped_blob in out nocopy blob
-    , p_name varchar2 character set any_cs := null
-    , p_idx number := null
+    , p_name     varchar2 character set any_cs := null
+    , p_idx      number := null
     , p_encoding varchar2 := null
     );
 --
   procedure add_file
     ( p_zipped_blob in out nocopy blob
-    , p_name varchar2 character set any_cs
-    , p_content blob
-    , p_comment varchar2 character set any_cs := null
-    , p_password varchar2 := null
-    , p_date date := null
+    , p_name      varchar2 character set any_cs
+    , p_content   blob
+    , p_comment   varchar2 character set any_cs := null
+    , p_password  varchar2 := null
+    , p_date      date     := null
+    , p_zipcrypto boolean  := null
+    );
+--
+  procedure add_csv
+    ( p_zipped_blob in out nocopy blob
+    , p_cursor      in out sys_refcursor
+    , p_name           varchar2 character set any_cs
+    , p_comment        varchar2 character set any_cs := null
+    , p_password       varchar2 := null
+    , p_date           date     := null
+    , p_separator      varchar2 := ','
+    , p_enclosed_by    varchar2 := '"'
+    , p_newline        varchar2 := null
+    , p_column_headers boolean  := null
+    , p_bulk_size      pls_integer := null
+    , p_encoding       varchar2 := null
+    , p_zipcrypto      boolean  := null
     );
 --
   procedure set_comment
