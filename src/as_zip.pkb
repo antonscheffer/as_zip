@@ -902,7 +902,7 @@ $END
     return to_number( utl_raw.reverse( utl_raw.substr( p_num, p_pos, p_bytes ) ), 'XXXXXXXXXXXXXXXX' );
   end;
   --
-  function get_encoding( p_encoding in varchar2 := null )
+  function get_encoding( p_encoding varchar2 := null )
   return varchar2
   is
     l_encoding varchar2(32767);
@@ -917,6 +917,21 @@ $END
       end if;
     end if;
     return coalesce( l_encoding, 'US8PC437' ); -- IBM codepage 437
+  end;
+  --
+  function char2raw( p_txt varchar2 character set any_cs, p_encoding varchar2 := null )
+  return raw
+  is
+  begin
+    if isnchar( p_txt )
+    then -- on my 12.1 database, which is not AL32UTF8,
+         -- utl_i18n.string_to_raw( p_txt, get_encoding( p_encoding ) does not work
+      return utl_raw.convert( utl_i18n.string_to_raw( p_txt )
+                            , get_encoding( p_encoding )
+                            , nls_charset_name( nls_charset_id( 'NCHAR_CS' ) )
+                            );
+    end if;
+    return utl_i18n.string_to_raw( p_txt, get_encoding( p_encoding ) );
   end;
   --
   function get_64k_raw( p_raw1 raw, p_raw2 raw, p_raw3 raw, p_encoding varchar2 := null )
@@ -1646,7 +1661,6 @@ $END
     l_info      tp_zip_info;
     l_name      raw(32767);
     l_utf8_name raw(32767);
-    l_charset   varchar2(1000);
   begin
     if p_name is null and p_idx is null
     then
@@ -1660,17 +1674,8 @@ $END
     --
     if p_name is not null
     then
-      l_charset := case when isnchar( p_name ) then 'N' end || 'CHAR_CS';
-      l_charset := nls_charset_name( nls_charset_id( l_charset ) );
-      l_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
-                               , get_encoding( p_encoding )
-                               , l_charset
-                               );
---      l_name := utl_i18n.string_to_raw( p_name, p_cfh.encoding );
-      l_utf8_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
-                                    , 'AL32UTF8'
-                                    , l_charset
-                                    );
+      l_name := char2raw( p_name, p_encoding );
+      l_utf8_name := char2raw( p_name, 'AL32UTF8' );
     end if;
     --
     l_rv := false;
@@ -1936,7 +1941,7 @@ $THEN
       end if;
 $END
     end if;
-    l_name := utl_i18n.string_to_raw( p_name, 'AL32UTF8' );
+    l_name := char2raw( p_name, 'AL32UTF8' );
     dbms_lob.append( p_zipped_blob
                    , utl_raw.concat( c_LOCAL_FILE_HEADER -- Local file header signature
                                    , case when l_encrypted
@@ -1954,7 +1959,7 @@ $ELSE
 $END
                                        else hextoraw( '140000' ) -- version 2.0, not encrypted
                                      end
-                                   , case when l_name = utl_i18n.string_to_raw( p_name, 'US8PC437' ) or l_name is null
+                                   , case when l_name = char2raw( p_name ) or l_name is null
                                        then hextoraw( '00' )
                                        else hextoraw( '08' ) -- set Language encoding flag (EFS)
                                      end
@@ -2132,7 +2137,6 @@ $END
     l_cd_len integer;
     l_data_len integer;
     l_buf raw(32767);
-    l_charset varchar2(3999);
     l_name raw(32767);
     l_utf8_name raw(32767);
     l_cd   blob;
@@ -2164,17 +2168,8 @@ $END
     --
     if p_name is not null
     then
-      l_charset := case when isnchar( p_name ) then 'N' end || 'CHAR_CS';
-      l_charset := nls_charset_name( nls_charset_id( l_charset ) );
-      l_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
-                               , l_cfh.encoding
-                               , l_charset
-                               );
---      l_name := utl_i18n.string_to_raw( p_name, l_cfh.encoding );
-      l_utf8_name := utl_raw.convert( utl_i18n.string_to_raw( p_name )
-                                    , 'AL32UTF8'
-                                    , l_charset
-                                    );
+      l_name := char2raw( p_name, l_cfh.encoding );
+      l_utf8_name := char2raw( p_name, 'AL32UTF8' );
     end if;
     --
     l_ind := l_info.idx_cd;
@@ -2326,7 +2321,7 @@ $END
     if p_comment is not null
     then
       begin
-        l_comment := utl_i18n.string_to_raw( p_comment, 'AL32UTF8' );
+        l_comment := char2raw( p_comment, 'AL32UTF8' );
         l_k := utl_raw.length( l_comment );
       exception
         when others then
@@ -2427,7 +2422,7 @@ $END
     then
       l_len := 0;
     else
-      l_comment := utl_i18n.string_to_raw( p_comment, 'AL32UTF8' );
+      l_comment := char2raw( p_comment, 'AL32UTF8' );
       l_len := utl_raw.length( l_comment );
     end if;
     dbms_lob.trim( p_zipped_blob, l_info.idx_eocd + 19 );
@@ -2523,12 +2518,11 @@ $END
     l_csv_blob blob;
     l_col_cnt integer;
     l_desc_tab dbms_sql.desc_tab2;
-    v_tab dbms_sql.varchar2_table;
-    c_tab dbms_sql.clob_table;
+    l_v varchar2(32767);
+    l_clob clob;
     l_first pls_integer;
     l_r integer;
     l_cnt pls_integer;
-    c_bulk_size constant pls_integer   := nvl( p_bulk_size, 200 );
     c_separator constant varchar2(100) := nvl( substr( p_separator, 1, 100 ), ',' );
     c_newline   constant varchar2(10)  := nvl( p_newline, chr(13) || chr(10) );
     l_last_col pls_integer;
@@ -2612,10 +2606,10 @@ $END
                                          , 182, 183
                                          )
         then
-          dbms_sql.define_array( l_c, c, v_tab, c_bulk_size, 1 );
+          dbms_sql.define_column( l_c, c, l_v, 32767 );
         when l_desc_tab( c ).col_type in ( 112 )
         then
-          dbms_sql.define_array( l_c, c, c_tab, c_bulk_size, 1 );
+          dbms_sql.define_column( l_c, c, l_clob );
         else
           null;
       end case;
@@ -2623,41 +2617,27 @@ $END
     --
     l_cnt := 0;
     loop
-      l_r := dbms_sql.fetch_rows( l_c );
-      if l_r > 0
-      then
-        l_cnt := l_cnt + l_r;
-        for c in 1 .. l_col_cnt
-        loop
-          case
-            when l_desc_tab( c ).col_type in ( 2, 100, 101
-                                             , 12, 180, 181, 231
-                                             , 1, 9, 96
-                                             , 182, 183
-                                             )
-            then
-              dbms_sql.column_value( l_c, c, v_tab );
-              l_first := v_tab.first;
-              for i in 0 .. l_r - 1
-              loop
-                append( v_tab( i + l_first ), c < l_last_col );
-              end loop;
-              v_tab.delete;
-            when l_desc_tab( c ).col_type in ( 8, 112 )
-            then
-              dbms_sql.column_value( l_c, c, c_tab );
-              l_first := c_tab.first;
-              for i in 0 .. l_r - 1
-              loop
-                append_clob( c_tab( i + l_first ), c < l_last_col );
-              end loop;
-              v_tab.delete;
-            else
-              null;
-          end case;
-        end loop;
-      end if;
-      exit when l_r != c_bulk_size;
+      exit when dbms_sql.fetch_rows( l_c ) = 0;
+      l_cnt := l_cnt + l_r;
+      for c in 1 .. l_col_cnt
+      loop
+        case
+          when l_desc_tab( c ).col_type in ( 2, 100, 101
+                                           , 12, 180, 181, 231
+                                           , 1, 9, 96
+                                           , 182, 183
+                                           )
+          then
+            dbms_sql.column_value( l_c, c, l_v );
+            append( l_v, c < l_last_col );
+          when l_desc_tab( c ).col_type in ( 112 )
+          then
+            dbms_sql.column_value( l_c, c, l_clob );
+            append_clob( l_clob, c < l_last_col );
+          else
+            null;
+        end case;
+      end loop;
     end loop;
     dbms_sql.close_cursor( l_c );
     --
@@ -2693,34 +2673,5 @@ $END
       raise;
   end add_csv;
 --
-end;
-/
-
-declare
-  l_zip blob;
-  l_txt clob;
-  l_txt_blob blob;
-  l_dest_offset integer := 1;
-  l_src_offset  integer := 1;
-  l_context     integer := dbms_lob.default_lang_ctx;
-  l_warning     integer;
-  l_csid        integer := nls_charset_id( 'CHAR_CS' );
-begin
-  dbms_lob.createtemporary( l_txt, true );
-  for i in 1 .. 1000
-  loop
-    l_txt := l_txt || ( 'line ' || i || ': some easy to compress text on this line' || chr(13) || chr(10) );
-  end loop;
-  dbms_lob.createtemporary( l_txt_blob, true );
-  dbms_lob.converttoblob( l_txt_blob, l_txt, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
-  --
-  as_zip.add1file( l_zip, 'file1.txt', l_txt_blob );
-  as_zip.finish_zip( l_zip, 'Zipfile containing one file with unpressed size of ' || dbms_lob.getlength( l_txt_blob ) || '  bytes' );
-  --
-  dbms_lob.freetemporary( l_txt );
-  dbms_lob.freetemporary( l_txt_blob );
-  --
-  as_zip.save_zip( l_zip, 'VAGRANT', 'zip2.zip' );
-  dbms_lob.freetemporary( l_zip );
 end;
 /
