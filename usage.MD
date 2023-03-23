@@ -113,3 +113,53 @@ begin
   as_zip.save_zip( l_zip, 'VAGRANT', 'zip4.zip' );
   dbms_lob.freetemporary( l_zip );
 end;</code></pre>
+
+# See what's in a zip-file
+To see what's in a zip-file you have several options.  
+A file name in a zip-file can be as long as 64k bytes. Use as_zip.get_file_list to get a list of clobs with all the names
+<code><pre>declare
+  l_zip blob;
+  l_files as_zip.file_list;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip3.zip' );
+  l_files := as_zip.get_file_list( l_zip );
+  dbms_output.put_line( l_files.count );
+  for i in 1 .. l_files.count
+  loop
+    dbms_output.put_line( l_files( i ) );
+  end loop;
+  dbms_lob.freetemporary( l_zip );
+end;
+</code></pre>
+As in most cases file names aren't that big, you can use as_zip.get_file_list to get a list of varchar2(4000)'s with all the names. If one of the file names in the zip-file doesn't fit into a varchar2(4000) and exception will be raised
+<code><pre>declare
+  l_zip blob;
+  l_files as_zip.file_names;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip3.zip' );
+  l_files := as_zip.get_file_names( l_zip );
+  dbms_output.put_line( l_files.count );
+  for i in 1 .. l_files.count
+  loop
+    dbms_output.put_line( l_files( i ) );
+  end loop;
+  dbms_lob.freetemporary( l_zip );
+end;
+</code></pre>
+Or use as_zip.get_file_info in a loop to get info, including the name, on the files inside the zip-files
+<code><pre>declare
+  l_zip blob;
+  l_info as_zip.file_info;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip3.zip' );
+  dbms_output.put_line( as_zip.get_count( l_zip ) );
+  for i in 1 .. as_zip.get_count( l_zip )
+  loop
+    l_info := as_zip.get_file_info( l_zip, p_idx => i );
+    dbms_output.put_line( l_info.name
+      || ' len: ' || l_info.len
+      || ' compressed: ' || l_info.clen);
+  end loop;
+  dbms_lob.freetemporary( l_zip );
+end;
+</code></pre>
