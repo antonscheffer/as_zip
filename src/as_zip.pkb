@@ -1808,7 +1808,6 @@ $END
 $IF as_zip.use_winzip_encryption
 $THEN
    end if;
-$END
 $IF as_zip.use_dbms_crypto
 $THEN
     l_salt := dbms_crypto.randombytes( l_key_bits / 16 );
@@ -1879,6 +1878,7 @@ $END
     dbms_lob.freetemporary( l_tmp );
     dbms_lob.writeappend( l_rv, 10, l_mac );
     return l_rv;
+$END
   end;
 --
   procedure add1file
@@ -2475,7 +2475,7 @@ $END
     end if;
     --
     return p_file_info.found;
-  end;
+  end get_file_info;
 --
   function get_file_info
     ( p_zipped_blob blob
@@ -2495,8 +2495,53 @@ $END
                             , p_encoding
                             );
     return l_file_info;
-  end;
---
+  end get_file_info;
+  --
+  procedure add_clob
+    ( p_zipped_blob in out nocopy blob
+    , p_name      varchar2 character set any_cs
+    , p_content   clob character set any_cs
+    , p_comment   varchar2 character set any_cs := null
+    , p_password  varchar2 := null
+    , p_date      date     := null
+    , p_encoding  varchar2 := null
+    , p_zipcrypto boolean  := null
+    )
+  is
+    l_blob        blob;
+    l_dest_offset integer := 1;
+    l_src_offset  integer := 1;
+    l_context     integer := dbms_lob.default_lang_ctx;
+    l_warning     integer;
+    l_csid        integer := coalesce( nls_charset_id( p_encoding ), dbms_lob.default_csid );
+  begin
+    dbms_lob.createtemporary( l_blob, true, c_lob_duration );
+    if p_content is not null
+    then
+      dbms_lob.converttoblob( l_blob, p_content, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
+    end if;
+    --
+    add_file
+      ( p_zipped_blob
+      , p_name
+      , l_blob
+      , p_comment
+      , p_password
+      , p_date
+      , p_zipcrypto
+      );
+    --
+    dbms_lob.freetemporary( l_blob );
+  exception
+    when others
+    then
+      if dbms_lob.istemporary( l_blob ) = 1
+      then
+        dbms_lob.freetemporary( l_blob );
+      end if;
+      raise;
+  end add_clob;
+  --
   procedure add_csv
     ( p_zipped_blob in out nocopy blob
     , p_cursor      in out sys_refcursor
@@ -2515,7 +2560,6 @@ $END
   is
     l_c   integer;
     l_csv clob;
-    l_csv_blob blob;
     l_col_cnt integer;
     l_desc_tab dbms_sql.desc_tab2;
     l_v varchar2(32767);
@@ -2526,11 +2570,6 @@ $END
     c_separator constant varchar2(100) := nvl( substr( p_separator, 1, 100 ), ',' );
     c_newline   constant varchar2(10)  := nvl( p_newline, chr(13) || chr(10) );
     l_last_col pls_integer;
-    l_dest_offset integer := 1;
-    l_src_offset  integer := 1;
-    l_context     integer := dbms_lob.default_lang_ctx;
-    l_warning     integer;
-    l_csid        integer := nls_charset_id( coalesce( p_encoding, 'CHAR_CS' ) );
     --
     procedure append( p_val varchar2, p_sep boolean )
     is
@@ -2640,23 +2679,25 @@ $END
       end loop;
     end loop;
     dbms_sql.close_cursor( l_c );
+    if dbms_lob.istemporary( l_clob ) = 1
+    then
+      dbms_lob.freetemporary( l_clob );
+    end if;
     --
-    dbms_lob.createtemporary( l_csv_blob, true, c_lob_duration );
-    dbms_lob.converttoblob( l_csv_blob, l_csv, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
-
-    add_file
+    add_clob
       ( p_zipped_blob
       , p_name
-      , l_csv_blob
+      , l_csv
       , p_comment
       , p_password
       , p_date
+      , p_encoding
       , p_zipcrypto
       );
     --
     dbms_lob.freetemporary( l_csv );
   exception
-    when value_error
+    when others
     then
       if dbms_sql.is_open( l_c )
       then
@@ -2665,10 +2706,6 @@ $END
       if dbms_lob.istemporary( l_csv ) = 1
       then
         dbms_lob.freetemporary( l_csv );
-      end if;
-      if dbms_lob.istemporary( l_csv_blob ) = 1
-      then
-        dbms_lob.freetemporary( l_csv_blob );
       end if;
       raise;
   end add_csv;
