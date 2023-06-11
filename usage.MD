@@ -131,7 +131,7 @@ begin
   dbms_lob.freetemporary( l_zip );
 end;
 </code></pre>
-As in most cases file names aren't that big, you can use as_zip.get_file_list to get a list of varchar2(4000)'s with all the names. If one of the file names in the zip-file doesn't fit into a varchar2(4000) and exception will be raised
+As in most cases file names aren't that big, you can use as_zip.get_file_names to get a list of varchar2(4000)'s with all the names. If one of the file names in the zip-file doesn't fit into a varchar2(4000) and exception will be raised
 <code><pre>declare
   l_zip blob;
   l_files as_zip.file_names;
@@ -157,6 +157,7 @@ begin
   loop
     l_info := as_zip.get_file_info( l_zip, p_idx => i );
     dbms_output.put_line( l_info.name
+      || ' password needed: ' || case when l_info.is_encrypted then 'yes' else 'no' end
       || ' len: ' || l_info.len
       || ' compressed: ' || l_info.clen);
   end loop;
