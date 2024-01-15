@@ -117,7 +117,7 @@ end;</code></pre>
 # See what's in a zip-file
 To see what's in a zip-file you have several options.  
 A file name in a zip-file can be as long as 64k bytes. Use as_zip.get_file_list to get a list of clobs with all the names
-<code><pre>declare
+<pre><code>declare
   l_zip blob;
   l_files as_zip.file_list;
 begin
@@ -129,10 +129,9 @@ begin
     dbms_output.put_line( l_files( i ) );
   end loop;
   dbms_lob.freetemporary( l_zip );
-end;
-</code></pre>
+end;</code></pre>
 As in most cases file names aren't that big, you can use as_zip.get_file_names to get a list of varchar2(4000)'s with all the names. If one of the file names in the zip-file doesn't fit into a varchar2(4000) and exception will be raised
-<code><pre>declare
+<pre><code>declare
   l_zip blob;
   l_files as_zip.file_names;
 begin
@@ -144,10 +143,9 @@ begin
     dbms_output.put_line( l_files( i ) );
   end loop;
   dbms_lob.freetemporary( l_zip );
-end;
-</code></pre>
+end;</code></pre>
 Or use as_zip.get_file_info in a loop to get info, including the name, on the files inside the zip-files
-<code><pre>declare
+<pre><code>declare
   l_zip blob;
   l_info as_zip.file_info;
 begin
@@ -162,5 +160,47 @@ begin
       || ' compressed: ' || l_info.clen);
   end loop;
   dbms_lob.freetemporary( l_zip );
-end;
-</code></pre>
+end;</code></pre>
+# To retrieve a file from a zip-file
+Just using a file name
+<pre><code>declare
+  l_zip blob;
+  l_file blob;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip4.zip' );
+  l_file := as_zip.get_file( l_zip, 'file1.csv' );
+  dbms_lob.freetemporary( l_file );
+  dbms_lob.freetemporary( l_zip );
+end;</code></pre>
+Or loogin all files
+<pre><code>declare
+  l_zip blob;
+  l_file blob;
+  l_info as_zip.file_info;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip4.zip' );
+  for i in 1 .. as_zip.get_count( l_zip )
+  loop
+    l_info := as_zip.get_file_info( l_zip, p_idx => i );
+    dbms_output.put_line( l_info.name );
+    l_file := as_zip.get_file( l_zip, p_idx => i );
+    dbms_lob.freetemporary( l_file );
+  end loop;
+  dbms_lob.freetemporary( l_zip );
+end;</code></pre>
+Or using a regular expression to get all csv-files
+<pre><code>declare
+  l_zip blob;
+  l_file blob;
+  l_file_names as_zip.file_names;
+begin
+  l_zip := as_zip.file2blob( 'VAGRANT', 'zip4.zip' );
+  l_file_names := as_zip.get_file_names( l_zip, p_filter => '.csv$' );
+  for i in 1 .. l_file_names.count
+  loop
+    dbms_output.put_line( l_file_names( i ) );  
+    l_file := as_zip.get_file( l_zip, l_file_names( i ) );
+    dbms_lob.freetemporary( l_file );
+  end loop;
+  dbms_lob.freetemporary( l_zip );
+end;</code></pre>
