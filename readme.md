@@ -10,7 +10,6 @@ Any simularities with [APEX_ZIP](https://docs.oracle.com/cd/E59726_01/doc.50/e39
 Default as_zip doesn't need any extra grants on Oracle supplied packages to run, but ....
 
 In the package spec are 3 constants which control the conditional compilation of the package body:
-* use_winzip_encryption constant boolean := true;
 * use_dbms_crypto       constant boolean := false;
 * use_utl_file          constant boolean := false;  
 
@@ -20,4 +19,4 @@ dbms_crypto is used for the Winzip AES encrypting, if you disable usage of dbms_
 
 utl_file is only used in as_zip.save_zip, you have to decide for yourself it you need that. But if you want to save a zip file on the file system of your database server you will have to set use_utl_file to true, and need execute right on Oracle supplied package on utl_file.
 
-You have to (re)compile the package body after you make any changes to these constants.
+You might have to (re)compile the package body after you make any changes to these constants.
