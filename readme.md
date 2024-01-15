@@ -9,7 +9,7 @@ Any simularities with [APEX_ZIP](https://docs.oracle.com/cd/E59726_01/doc.50/e39
 # Conditional compilation / required grants
 Default as_zip doesn't need any extra grants on Oracle supplied packages to run, but ....
 
-In the package spec are 3 constants which control the conditional compilation of the package body:
+In the package spec are 2 constants which control the conditional compilation of the package body:
 * use_dbms_crypto       constant boolean := false;
 * use_utl_file          constant boolean := false;  
 
