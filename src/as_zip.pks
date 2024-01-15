@@ -2,13 +2,16 @@ CREATE OR REPLACE package as_zip
 is
 /**********************************************
 **
-Author: Anton Scheffer
-** Date: 25-01-2012
+** Author: Anton Scheffer
 **
 ** Changelog:
+**   Date: 12-11-2023
+**     Added p_filter to get_file_names and get_file_list
+**     Added p_is_directory to add_file
+**     Removed use_winzip_encryption
+**     Removed p_nfile_name from get_file
 **   Date: 18-03-2023
 **     Added get_file_names
-**     Added add_csv
 **   Date: 29-12-2022
 **     fixed decryption of encrypted files
 **   Date: 27-09-2022
@@ -42,7 +45,7 @@ Author: Anton Scheffer
 **     Some minor improvements
 ******************************************************************************
 ******************************************************************************
-Copyright (C) 2010,2021 by Anton Scheffer
+Copyright (C) 2010-2023 by Anton Scheffer
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -65,7 +68,6 @@ THE SOFTWARE.
 ******************************************************************************
 ******************************************** */
 
-  use_winzip_encryption constant boolean := true;
   use_dbms_crypto       constant boolean := false;
   use_utl_file          constant boolean := false;
   --
@@ -85,36 +87,44 @@ THE SOFTWARE.
     );
   --
   function get_file_list
-    ( p_zipped_blob blob
-    , p_encoding    varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_zipped_blob      blob
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_list;
   --
   function get_file_list
-    ( p_dir         varchar2
-    , p_zip_file    varchar2
-    , p_encoding    varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_dir              varchar2
+    , p_zip_file         varchar2
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_list;
   --
   function get_file_names
-    ( p_zipped_blob blob
-    , p_encoding    varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_zipped_blob      blob
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_names;
   --
   function get_file_names
-    ( p_dir         varchar2
-    , p_zip_file    varchar2
-    , p_encoding    varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_dir              varchar2
+    , p_zip_file         varchar2
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_names;
   --
@@ -122,7 +132,6 @@ THE SOFTWARE.
     ( p_zipped_blob blob
     , p_file_name   varchar2 character set any_cs := null
     , p_encoding    varchar2 := null
-    , p_nfile_name  varchar2 character set any_cs := null
     , p_idx         number := null
     , p_password    varchar2 := null
     )
@@ -133,7 +142,6 @@ THE SOFTWARE.
     , p_zip_file   varchar2
     , p_file_name  varchar2 character set any_cs := null
     , p_encoding   varchar2 := null
-    , p_nfile_name varchar2 character set any_cs := null
     , p_idx        number := null
     , p_password   varchar2 := null
     )
@@ -197,12 +205,13 @@ THE SOFTWARE.
 --
   procedure add_file
     ( p_zipped_blob in out nocopy blob
-    , p_name      varchar2 character set any_cs
-    , p_content   blob
-    , p_comment   varchar2 character set any_cs := null
-    , p_password  varchar2 := null
-    , p_date      date     := null
-    , p_zipcrypto boolean  := null
+    , p_name         varchar2 character set any_cs
+    , p_content      blob     := null
+    , p_comment      varchar2 character set any_cs := null
+    , p_password     varchar2 := null
+    , p_date         date     := null
+    , p_zipcrypto    boolean  := null
+    , p_is_directory boolean  := null
     );
 --
   procedure add_csv
