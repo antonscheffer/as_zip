@@ -1,7 +1,7 @@
 CREATE OR REPLACE package body as_zip
 is
   --
-  c_version constant raw(1) := hextoraw( '15' ); -- version 2.1
+  c_version constant raw(1) := hextoraw( '16' ); -- version 2.2
   --
   type tp_zip_info is record
     ( len integer
@@ -53,8 +53,6 @@ is
   l_key1 raw(4);
   l_key2 raw(4);
   l_key3 raw(4);
-$IF as_zip.use_winzip_encryption
-$THEN
 $IF as_zip.use_dbms_crypto
 $THEN
 $ELSE
@@ -190,7 +188,7 @@ $ELSE
       n := n - 1;
       p_encrypt_key( 1280 + i ) := bitxor( p_encrypt_key( 1280 + i - Nk ), t );
     end loop;
-  end;
+  end aes_encrypt_key;
   --
   function aes_encrypt
     ( src varchar2
@@ -272,7 +270,7 @@ $ELSE
         || grv( substr( v1, 1, 2 ), substr( v2, 3, 2 ), substr( v3, 5, 2 ), substr( v0, 7, 2 ), p_decrypt_key( 1280 + k + 1 ) )
         || grv( substr( v2, 1, 2 ), substr( v3, 3, 2 ), substr( v0, 5, 2 ), substr( v1, 7, 2 ), p_decrypt_key( 1280 + k + 2 ) )
         || grv( substr( v3, 1, 2 ), substr( v0, 3, 2 ), substr( v1, 5, 2 ), substr( v2, 7, 2 ), p_decrypt_key( 1280 + k + 3 ) );
-  end;
+  end aes_encrypt;
   --
   function sha1( p_src blob, p_first_block raw := null  )
   return raw
@@ -414,7 +412,7 @@ $ELSE
                          , utl_raw.cast_from_binary_integer( th(3) )
                          , utl_raw.cast_from_binary_integer( th(4) )
                          );
-  end;
+  end sha1;
   --
   function mac_sha1( src blob, key raw )
   return raw
@@ -443,11 +441,10 @@ $ELSE
                      )
                , utl_raw.bit_xor( utl_raw.copies( hextoraw( '5c' ), l_blocksize ), l_key )
                );
-  end;
-$END
+  end mac_sha1;
 $END
   --
-  function inflate( p_cmpr blob, p_deflate64 boolean := true )
+  function inflate( p_cmpr blob, p_deflate64 boolean := true, p_max_uncompressed_len integer )
   return blob
   is
     l_rv blob;
@@ -814,11 +811,21 @@ $END
       else
         raise no_data_found;
       end if;
-      exit when l_final;
+      if     p_max_uncompressed_len is not null
+         and dbms_lob.getlength( l_rv ) > p_max_uncompressed_len
+      then
+        raise_application_error( -20032, 'file length will be larger than allowed size of ' || p_max_uncompressed_len || ' bytes' );
+      end if;
+     exit when l_final;
     end loop;
     slw2rv( l_slw_idx - 1 );
+    if     p_max_uncompressed_len is not null
+       and dbms_lob.getlength( l_rv ) > p_max_uncompressed_len
+    then
+      raise_application_error( -20033, 'file length will be larger than allowed size of ' || p_max_uncompressed_len || ' bytes' );
+    end if;
     return l_rv;
-  end;
+  end inflate;
   --
   procedure init_zipcrypto_tab
   is
@@ -839,7 +846,7 @@ $END
       end loop;
       l_zipcrypto_tab( to_char( i, 'fm0X' ) ) := hextoraw( to_char( l_tmp, 'fm0xxxxxxx' ) );
     end loop;
-  end;
+  end init_zipcrypto_tab;
   --
   procedure update_keys( p_char raw )
   is
@@ -858,7 +865,7 @@ $END
     l_key3 := utl_raw.bit_xor( l_zipcrypto_tab( utl_raw.bit_xor( utl_raw.substr( l_key2, 1, 1 ), utl_raw.substr( l_key3, 4, 1 ) ) )
                              , utl_raw.concat( hextoraw( '00' ), utl_raw.substr( l_key3, 1, 3 ) )
                              );
-  end;
+  end update_keys;
   --
   procedure init_keys( p_password raw )
   is
@@ -870,7 +877,7 @@ $END
     loop
       update_keys( utl_raw.substr( p_password, i, 1 ) );
     end loop;
-  end;
+  end init_keys;
   --
   function zipcrypto_crypt( p_chr raw )
   return raw
@@ -886,7 +893,7 @@ $END
                     );
     l_tmp := utl_raw.bit_xor( p_chr, utl_raw.substr( l_tmp, 3, 1 ) );
     return l_tmp;
-  end;
+  end zipcrypto_crypt;
   --
   function little_endian( p_big number, p_bytes pls_integer := 4 )
   return raw
@@ -917,7 +924,7 @@ $END
       end if;
     end if;
     return coalesce( l_encoding, 'US8PC437' ); -- IBM codepage 437
-  end;
+  end get_encoding;
   --
   function char2raw( p_txt varchar2 character set any_cs, p_encoding varchar2 := null )
   return raw
@@ -970,7 +977,7 @@ $END
     dbms_lob.converttoclob( l_rv, l_tmp, dbms_lob.lobmaxsize, l_dest_offset, l_src_offset, l_csid, l_context, l_warning );
     dbms_lob.freetemporary( l_tmp );
     return l_rv;
-  end;
+  end get_64k_raw;
   --
   procedure get_zip_info( p_zip blob, p_info out tp_zip_info, p_get_comment boolean := false )
   is
@@ -1012,13 +1019,15 @@ $END
       raise_application_error( -20003, 'Error parsing the zipfile' );
     end if;
     p_info.idx_eocd := l_ind;
-    p_info.zip64 :=  (  utl_raw.substr( l_buf,  5, 2 ) = 'FFFF'
-                     or utl_raw.substr( l_buf,  7, 2 ) = 'FFFF'
-                     or utl_raw.substr( l_buf,  9, 2 ) = 'FFFF'
-                     or utl_raw.substr( l_buf, 11, 2 ) = 'FFFF'
-                     or utl_raw.substr( l_buf, 13, 4 ) = 'FFFFFFFF'
-                     or utl_raw.substr( l_buf, 17, 4 ) = 'FFFFFFFF'
-                     ) and l_ind > 21;
+    p_info.zip64 :=  l_ind > 21
+                     and (  utl_raw.substr( l_buf,  5, 2 ) = 'FFFF'
+                         or utl_raw.substr( l_buf,  7, 2 ) = 'FFFF'
+                         or utl_raw.substr( l_buf,  9, 2 ) = 'FFFF'
+                         or utl_raw.substr( l_buf, 11, 2 ) = 'FFFF'
+                         or utl_raw.substr( l_buf, 13, 4 ) = 'FFFFFFFF'
+                         or utl_raw.substr( l_buf, 17, 4 ) = 'FFFFFFFF'
+                         or dbms_lob.substr( p_zip, 4, l_ind - 20 ) = c_ZIP64_END_OF_CD_LOCATOR
+                         );
     if p_info.zip64
     then
       l_buf := dbms_lob.substr( p_zip, 20, l_ind - 20 );
@@ -1071,12 +1080,13 @@ $END
                                           );
       end if;
     end if;
-  end;
+  end get_zip_info;
   --
   function parse_file
     ( p_zipped_blob blob
     , p_fh in out tp_cfh
     , p_password raw
+    , p_max_uncompressed_len number
     )
   return blob
   is
@@ -1092,8 +1102,10 @@ $END
     l_crypto_buf varchar2(32767);
     c_crypto_sz constant pls_integer := 16383; -- size in bytes
     l_crc raw(4);
-$IF as_zip.use_winzip_encryption
-$THEN
+    l_len integer;
+    l_winzip_encrypted boolean;
+    l_lz_buf raw(32766);
+    l_hdl binary_integer;
     l_idx integer;
     l_key_bits pls_integer;
     l_key_len pls_integer;
@@ -1108,7 +1120,6 @@ $IF as_zip.use_dbms_crypto
 $THEN
 $ELSE
     l_aes_key tp_aes_tab;
-$END
 $END
     --
     function zipcrypto_decrypt( p_chr raw )
@@ -1139,14 +1150,13 @@ $END
     dbms_lob.createtemporary( l_rv, true, c_lob_duration );
     if bitand( to_number( utl_raw.substr( l_buf, 7, 1 ), 'XX' ), 1 ) > 0
     then
+      if p_password is null or utl_raw.length( p_password ) = 0
+      then
+        raise_application_error( -20009, 'No password provided' );
+      end if;
       if l_compression_method = '6300'
       then -- Winzip AES encrypted
-$IF as_zip.use_winzip_encryption
-$THEN
-        if p_password is null or utl_raw.length( p_password ) = 0
-        then
-          raise_application_error( -20009, 'No password provided' );
-        end if;
+        l_winzip_encrypted := true;
         if l_m < 11 or l_m > 32767
         then
           raise_application_error( -20010, 'Error parsing the zipfile' );
@@ -1240,17 +1250,6 @@ $END
           l_crypto_2do := l_crypto_2do - 16368;
           dbms_lob.writeappend( l_rv, utl_raw.length( l_rv_buf ), l_rv_buf );
         end loop;
-        if l_compression_method in ( '0800', '0900' )
-        then
-          return inflate( l_rv, l_compression_method = '0900' );
-        elsif l_compression_method = '0000'
-        then
-          return l_rv;
-        end if;
-        raise_application_error( -20014, 'Unhandled compression method ' || l_compression_method );
-$ELSE
-        raise_application_error( -20015, 'Winzip Encryption is not enabled, change constant "use_winzip_encryption" in the package specication to true and recompile it.' );
-$END
       else -- ZipCrypto
         init_zipcrypto_tab;
         init_keys( p_password );
@@ -1291,23 +1290,53 @@ $END
                    , 11
                    , 1
                    );
-      dbms_lob.append( l_deflate
-                     , utl_raw.concat( p_fh.crc32
-                                     , utl_raw.substr( utl_raw.reverse( to_char( p_fh.original_len, 'fm0XXXXXXXXXXXXXXX' ) ), 1, 4 )
-                                     )
-                     );
+      if l_winzip_encrypted is null
+      then
+        dbms_lob.append( l_deflate
+                       , utl_raw.concat( p_fh.crc32
+                                       , utl_raw.substr( utl_raw.reverse( to_char( p_fh.original_len, 'fm0XXXXXXXXXXXXXXX' ) ), 1, 4 )
+                                       )
+                       );
+      end if;
       begin
+        if p_max_uncompressed_len is not null or l_winzip_encrypted
+        then
+          l_len := 0;
+          dbms_lob.freetemporary( l_rv );
+          dbms_lob.createtemporary( l_rv, true, c_lob_duration );
+          l_hdl := utl_compress.lz_uncompress_open( l_deflate );
+          begin
+            loop
+              utl_compress.lz_uncompress_extract( l_hdl, l_lz_buf );
+              l_len := l_len + nvl( utl_raw.length( l_lz_buf ), 0 );
+              if l_len > p_max_uncompressed_len
+              then
+                raise_application_error( -20031, 'file length will be larger than allowed size of ' || p_max_uncompressed_len || ' bytes' );
+              end if;
+              dbms_lob.append( l_rv, l_lz_buf );
+            end loop;
+          exception
+            when no_data_found then
+              utl_compress.lz_uncompress_close( l_hdl );
+              return l_rv;
+          end;
+        end if;
         return utl_compress.lz_uncompress( l_deflate );
       exception
         when others then
-          return inflate( l_rv );
+          return inflate( l_rv, l_compression_method = '0900', p_max_uncompressed_len );
       end;
     elsif l_compression_method = '0000'
     then
+      if     p_max_uncompressed_len is not null
+         and dbms_lob.getlength( l_rv ) > p_max_uncompressed_len
+      then
+        raise_application_error( -20030, 'file length will be larger than allowed size of ' || p_max_uncompressed_len || ' bytes' );
+      end if;
       return l_rv;
     end if;
     raise_application_error( -20008, 'Unhandled compression method ' || l_compression_method );
-  end;
+  end parse_file;
   --
   function file2blob
     ( p_dir varchar2
@@ -1337,7 +1366,7 @@ $END
         dbms_lob.freetemporary( file_blob );
       end if;
       raise;
-  end;
+  end file2blob;
   --
   function parse_central_file_header
     ( p_zip blob
@@ -1452,7 +1481,7 @@ $END
     end if;
     --
     return true;
-  end;
+  end parse_central_file_header;
   --
   procedure write_eocd
     ( p_zip in out nocopy blob
@@ -1512,16 +1541,18 @@ $END
                           , p_info.comment3
                           );
     end if;
-  end;
+  end write_eocd;
   --
   procedure get_files
-    ( p_zipped_blob blob
-    , p_encoding    varchar2 := null
-    , p_start_entry integer  := null
-    , p_max_entries integer  := null
-    , p_list boolean
-    , p_file_list out  file_list
-    , p_file_names out file_names
+    ( p_zipped_blob      blob
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean := null
+    , p_list             boolean
+    , p_file_list  out   file_list
+    , p_file_names out   file_names
     )
   is
     l_info tp_zip_info;
@@ -1529,6 +1560,7 @@ $END
     l_ind integer;
     l_idx integer;
     l_encoding varchar2(3999);
+    l_name clob;
     l_cnt pls_integer := 0;
   begin
     if p_list
@@ -1552,33 +1584,51 @@ $END
                 or not parse_central_file_header( p_zipped_blob, l_ind, l_cfh );
       if l_idx >= nvl( p_start_entry, 1 )
       then
-        l_cnt := l_cnt + 1;
         if p_list
         then
-          p_file_list.extend;
-          p_file_list( l_cnt ) := get_64k_raw( l_cfh.name1
-                                             , l_cfh.name2
-                                             , l_cfh.name3
-                                             , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
-                                             );
+          l_name := get_64k_raw( l_cfh.name1
+                               , l_cfh.name2
+                               , l_cfh.name3
+                               , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
+                               );
+          if    p_filter is null
+             or l_name like p_filter
+             or ( p_case_insensitive and upper( l_name ) like upper( p_filter ) )
+             or regexp_like( l_name, p_filter, case when p_case_insensitive then 'i' end )
+          then
+            l_cnt := l_cnt + 1;
+            p_file_list.extend;
+            p_file_list( l_cnt ) := l_name;
+          end if;
+          l_name := null;
         else
-          p_file_names.extend;
-          p_file_names( l_cnt ) := utl_i18n.raw_to_char( l_cfh.name1
-                                                        , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
-                                                        );
+          l_name := utl_i18n.raw_to_char( l_cfh.name1
+                                        , case when l_cfh.utf8 then 'AL32UTF8' else l_encoding end
+                                        );
+          if    p_filter is null
+             or l_name like p_filter
+             or ( p_case_insensitive and upper( l_name ) like upper( p_filter ) )
+             or regexp_like( l_name, p_filter, case when p_case_insensitive then 'i' end )
+          then
+            l_cnt := l_cnt + 1;
+            p_file_names.extend;
+            p_file_names( l_cnt ) := l_name;
+          end if;
         end if;
       end if;
       l_ind := l_ind + l_cfh.len;
       l_idx := l_idx + 1;
     end loop;
     --
-  end;
+  end get_files;
   --
   function get_file_list
-    ( p_zipped_blob blob
-    , p_encoding varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_zipped_blob      blob
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_list
   is
@@ -1590,6 +1640,8 @@ $END
       , p_encoding
       , p_start_entry
       , p_max_entries
+      , p_filter
+      , p_case_insensitive
       , true
       , l_file_list
       , l_file_names
@@ -1598,23 +1650,32 @@ $END
   end;
   --
   function get_file_list
-    ( p_dir varchar2
-    , p_zip_file varchar2
-    , p_encoding varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_dir              varchar2
+    , p_zip_file         varchar2
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_list
   is
   begin
-    return get_file_list( file2blob( p_dir, p_zip_file ), p_encoding, p_start_entry, p_max_entries );
+    return get_file_list( file2blob( p_dir, p_zip_file )
+                        , p_encoding
+                        , p_start_entry
+                        , p_max_entries
+                        , p_filter
+                        , p_case_insensitive );
   end;
   --
   function get_file_names
-    ( p_zipped_blob blob
-    , p_encoding    varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_zipped_blob      blob
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_names
   is
@@ -1626,6 +1687,8 @@ $END
       , p_encoding
       , p_start_entry
       , p_max_entries
+      , p_filter
+      , p_case_insensitive
       , false
       , l_file_list
       , l_file_names
@@ -1634,16 +1697,24 @@ $END
   end;
   --
   function get_file_names
-    ( p_dir varchar2
-    , p_zip_file varchar2
-    , p_encoding varchar2 := null
-    , p_start_entry integer := null
-    , p_max_entries integer := null
+    ( p_dir              varchar2
+    , p_zip_file         varchar2
+    , p_encoding         varchar2 := null
+    , p_start_entry      integer  := null
+    , p_max_entries      integer  := null
+    , p_filter           varchar2 := null
+    , p_case_insensitive boolean  := null
     )
   return file_names
   is
   begin
-    return get_file_names( file2blob( p_dir, p_zip_file ), p_encoding, p_start_entry, p_max_entries );
+    return get_file_names( file2blob( p_dir, p_zip_file )
+                         , p_encoding
+                         , p_start_entry
+                         , p_max_entries
+                         , p_filter
+                         , p_case_insensitive
+                         );
   end;
   --
   function get_central_file_header
@@ -1696,13 +1767,12 @@ $END
     p_cfh.idx := l_idx;
     p_cfh.encoding := get_encoding( p_encoding );
     return l_rv;
-  end;
+  end get_central_file_header;
   --
   function get_file
     ( p_zipped_blob blob
     , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
-    , p_nfile_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_password varchar2 := null
     )
@@ -1710,38 +1780,30 @@ $END
   is
     l_cfh tp_cfh;
   begin
-    if not (  get_central_file_header( p_zipped_blob
-                                     , p_file_name
-                                     , p_idx
-                                     , p_encoding
-                                     , l_cfh
-                                     )
-           or get_central_file_header( p_zipped_blob
-                                     , p_nfile_name
-                                     , p_idx
-                                     , p_encoding
-                                     , l_cfh
-                                     )
-           )
+    if not get_central_file_header( p_zipped_blob
+                                  , p_file_name
+                                  , p_idx
+                                  , p_encoding
+                                  , l_cfh
+                                  )
     then
       return null;
     end if;
-    return parse_file( p_zipped_blob, l_cfh, utl_raw.cast_to_raw( p_password ) );
-  end;
+    return parse_file( p_zipped_blob, l_cfh, utl_raw.cast_to_raw( p_password ), null );
+  end get_file;
   --
   function get_file
     ( p_dir varchar2
     , p_zip_file varchar2
     , p_file_name varchar2 character set any_cs := null
     , p_encoding varchar2 := null
-    , p_nfile_name varchar2 character set any_cs := null
     , p_idx number := null
     , p_password varchar2 := null
     )
   return blob
   is
   begin
-    return get_file( file2blob( p_dir, p_zip_file ), p_file_name, p_encoding, p_nfile_name, p_idx, p_password );
+    return get_file( file2blob( p_dir, p_zip_file ), p_file_name, p_encoding, p_idx, p_password );
   end;
   --
   function encrypt( p_pw varchar2, p_src blob, p_crc32 raw, p_zipcrypto boolean)
@@ -1749,8 +1811,6 @@ $END
   is
     l_rv blob;
     l_pw raw(32767) := utl_raw.cast_to_raw( p_pw );
-$IF as_zip.use_winzip_encryption
-$THEN
     l_salt raw(16);
     l_key  raw(32);
     l_key_bits pls_integer := 256;
@@ -1768,7 +1828,6 @@ $THEN
 $ELSE
     l_aes_key tp_aes_tab;
 $END
-$END
   l_buf varchar2(32767);
   l_buf2 varchar2(32767);
   --
@@ -1781,11 +1840,8 @@ $END
     return l_tmp;
   end;
   begin
-$IF as_zip.use_winzip_encryption
-$THEN
    if p_zipcrypto
    then
-$END
     init_zipcrypto_tab;
     init_keys( l_pw );
     for i in 1 .. 11
@@ -1805,8 +1861,6 @@ $END
       l_buf2 := null;
     end loop;
     return l_rv;
-$IF as_zip.use_winzip_encryption
-$THEN
    end if;
 $IF as_zip.use_dbms_crypto
 $THEN
@@ -1843,7 +1897,7 @@ $ELSE
     aes_encrypt_key( l_key, l_aes_key );
 $END
     l_rv := utl_raw.concat( l_salt, utl_raw.substr( l_keys, -2, 2 ) );
---
+    --
     for i in 0 .. trunc( ( dbms_lob.getlength( p_src ) - 1 ) / 16 )
     loop
       l_block := dbms_lob.substr( p_src, 16, i * 16 + 1 );
@@ -1878,9 +1932,8 @@ $END
     dbms_lob.freetemporary( l_tmp );
     dbms_lob.writeappend( l_rv, 10, l_mac );
     return l_rv;
-$END
-  end;
---
+  end encrypt;
+  --
   procedure add1file
     ( p_zipped_blob in out nocopy blob
     , p_name      varchar2 character set any_cs
@@ -1928,8 +1981,6 @@ $END
       l_encrypted := true;
       l_blob := encrypt( p_password, l_blob, l_crc32, p_zipcrypto );
       l_clen := dbms_lob.getlength( l_blob );
-$IF as_zip.use_winzip_encryption
-$THEN
       if not nvl( p_zipcrypto, false )
       then
         l_crc32 := hextoraw( '00000000' );
@@ -1939,14 +1990,11 @@ $THEN
                                                      end
                            );
       end if;
-$END
     end if;
     l_name := char2raw( p_name, 'AL32UTF8' );
     dbms_lob.append( p_zipped_blob
                    , utl_raw.concat( c_LOCAL_FILE_HEADER -- Local file header signature
                                    , case when l_encrypted
-$IF as_zip.use_winzip_encryption
-$THEN
                                        then
                                          case when p_zipcrypto
                                            then
@@ -1954,17 +2002,12 @@ $THEN
                                            else
                                              hextoraw( '330001' ) -- version 5.1, encrypted
                                          end
-$ELSE
-                                       then hextoraw( '140001' ) -- version 2.0, encrypted
-$END
                                        else hextoraw( '140000' ) -- version 2.0, not encrypted
                                      end
                                    , case when l_name = char2raw( p_name ) or l_name is null
                                        then hextoraw( '00' )
                                        else hextoraw( '08' ) -- set Language encoding flag (EFS)
                                      end
-$IF as_zip.use_winzip_encryption
-$THEN
                                    , case when l_encrypted and not nvl( p_zipcrypto, false )
                                        then '6300' -- AE-x encryption marker
                                        else
@@ -1973,12 +2016,6 @@ $THEN
                                            else hextoraw( '0000' ) -- stored
                                          end
                                      end
-$ELSE
-                                   , case when l_compressed
-                                       then hextoraw( '0800' ) -- deflate
-                                       else hextoraw( '0000' ) -- stored
-                                      end
-$END
                                    , little_endian( to_number( to_char( l_now, 'ss' ) ) / 2
                                                   + to_number( to_char( l_now, 'mi' ) ) * 32
                                                   + to_number( to_char( l_now, 'hh24' ) ) * 2048
@@ -2011,12 +2048,13 @@ $END
     then
       dbms_lob.freetemporary( l_blob );
     end if;
-  end;
+  end add1file;
   --
-  procedure finish_zip(
-      p_zipped_blob in out nocopy blob
-     ,p_comment varchar2 default null
-  ) is
+  procedure finish_zip
+    ( p_zipped_blob in out nocopy blob
+    , p_comment varchar2 default null
+    )
+  is
     l_cnt integer := 0;
     l_offs integer;
     l_n pls_integer;
@@ -2028,10 +2066,15 @@ $END
     l_comment raw(32767) := utl_raw.cast_to_raw( p_comment );
   begin
     l_offs_dir_header := dbms_lob.getlength( p_zipped_blob );
+    if nvl( l_offs_dir_header, 0 ) = 0
+    then
+      return;
+    end if;
     l_offs := 1;
     loop
       l_buf := dbms_lob.substr( p_zipped_blob, 30, l_offs );
-      exit when c_LOCAL_FILE_HEADER != utl_raw.substr( l_buf, 1, 4 ) or nvl( utl_raw.length( l_buf ), 0 ) < 4;
+      exit when nvl( utl_raw.length( l_buf ), 0 ) < 4
+             or c_LOCAL_FILE_HEADER != utl_raw.substr( l_buf, 1, 4 );
       l_cnt := l_cnt + 1;
       l_compressed_len := little_endian( l_buf, 19, 4 );
       l_n := little_endian( l_buf, 27, 2 );
@@ -2079,20 +2122,23 @@ $END
                             + l_n  -- File name length
                             + l_m; -- Extra field length
     end loop;
-    l_offs_end_header := dbms_lob.getlength( p_zipped_blob );
-    dbms_lob.append( p_zipped_blob
-                   , utl_raw.concat( c_END_OF_CENTRAL_DIRECTORY                                -- End of central directory signature
-                                   , hextoraw( '0000' )                                        -- Number of this disk
-                                   , hextoraw( '0000' )                                        -- Disk where central directory starts
-                                   , little_endian( l_cnt, 2 )                                 -- Number of central directory records on this disk
-                                   , little_endian( l_cnt, 2 )                                 -- Total number of central directory records
-                                   , little_endian( l_offs_end_header - l_offs_dir_header )    -- Size of central directory
-                                   , little_endian( l_offs_dir_header )                        -- Offset of start of central directory, relative to start of archive
-                                   , little_endian( nvl( utl_raw.length( l_comment ), 0 ), 2 ) -- ZIP file comment length
-                                   , l_comment
-                                   )
-                   );
-  end;
+    if l_offs_dir_header > 0
+    then
+      l_offs_end_header := dbms_lob.getlength( p_zipped_blob );
+      dbms_lob.append( p_zipped_blob
+                     , utl_raw.concat( c_END_OF_CENTRAL_DIRECTORY                                -- End of central directory signature
+                                     , hextoraw( '0000' )                                        -- Number of this disk
+                                     , hextoraw( '0000' )                                        -- Disk where central directory starts
+                                     , little_endian( l_cnt, 2 )                                 -- Number of central directory records on this disk
+                                     , little_endian( l_cnt, 2 )                                 -- Total number of central directory records
+                                     , little_endian( l_offs_end_header - l_offs_dir_header )    -- Size of central directory
+                                     , little_endian( l_offs_dir_header )                        -- Offset of start of central directory, relative to start of archive
+                                     , little_endian( nvl( utl_raw.length( l_comment ), 0 ), 2 ) -- ZIP file comment length
+                                     , l_comment
+                                     )
+                     );
+    end if;
+  end finish_zip;
   --
   procedure save_zip
     ( p_zipped_blob blob
@@ -2116,9 +2162,9 @@ $THEN
     utl_file.fclose( l_fh );
 $ELSE
   begin
-    raise_application_error( -20024, 'as_zip.save_zip/utl_file not available.' );
+    raise_application_error( -20024, 'as_zip.save_zip/utl_file not available. Set as_zip.use_utl_file := true when you have access to utl_file.' );
 $END
-  end;
+  end save_zip;
   --
   procedure delete_file
     ( p_zipped_blob in out nocopy blob
@@ -2154,17 +2200,7 @@ $END
       return;
     end if;
     --
-    if p_encoding is not null
-    then
-      if nls_charset_id( p_encoding ) is null
-      then
-        l_cfh.encoding := utl_i18n.map_charset( p_encoding, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE );
-      else
-        l_cfh.encoding := p_encoding;
-      end if;
-    else
-      l_cfh.encoding := 'US8PC437';
-    end if;
+    l_cfh.encoding := get_encoding( p_encoding );
     --
     if p_name is not null
     then
@@ -2253,16 +2289,17 @@ $END
               );
     dbms_lob.freetemporary( l_data );
     dbms_lob.freetemporary( l_cd );
-  end;
+  end delete_file;
   --
   procedure add_file
     ( p_zipped_blob in out nocopy blob
-    , p_name      varchar2 character set any_cs
-    , p_content   blob
-    , p_comment   varchar2 character set any_cs := null
-    , p_password  varchar2 := null
-    , p_date      date     := null
-    , p_zipcrypto boolean  := null
+    , p_name         varchar2 character set any_cs
+    , p_content      blob     := null
+    , p_comment      varchar2 character set any_cs := null
+    , p_password     varchar2 := null
+    , p_date         date     := null
+    , p_zipcrypto    boolean  := null
+    , p_is_directory boolean  := null
     )
   is
     l_offs_lfh  integer;
@@ -2285,14 +2322,21 @@ $END
     get_zip_info( p_zipped_blob, l_info, true );
     l_offs_lfh := l_info.idx_cd - 1;
     --
-    if l_info.idx_cd >= 4294967295 -- FFFFFFFF
+    if    l_info.idx_cd >= 4294967295 -- FFFFFFFF
+       or dbms_lob.getlength( p_content ) >= 4294967295
     then
       raise_application_error( -20020, 'Zip64 not yet handled' );
     end if;
     dbms_lob.createtemporary( l_cd, true, c_lob_duration );
     dbms_lob.copy( l_cd, p_zipped_blob, dbms_lob.lobmaxsize, 1, l_info.idx_cd );
     dbms_lob.trim( p_zipped_blob, l_info.idx_cd - 1 );
-    add1file( l_data, p_name, p_content, p_password, p_date, p_zipcrypto );
+    add1file( l_data
+            , p_name
+            , case when p_is_directory then null else p_content end
+            , p_password
+            , p_date
+            , p_zipcrypto
+            );
     dbms_lob.append( p_zipped_blob, l_data );
     l_offs_cd := l_offs_lfh + dbms_lob.getlength( l_data );
     --
@@ -2342,8 +2386,11 @@ $END
                       , hextoraw( '0000' )          -- Internal file attributes =>
                                                     --     0000 binary file
                                                     --     0100 (ascii)text file
-                      , case when l_compressed_len = 0
-                              and substr( p_name, -1 ) in ( '/', '\' )
+                      , case
+                          when    p_is_directory
+                               or (   l_compressed_len = 0
+                                  and substr( p_name, -1 ) in ( '/', '\' )
+                                  )
                           then hextoraw( '1000ff41' ) -- a directory/folder
                           else hextoraw( '0000ff81' ) -- a file
                         end                           -- External file attributes
@@ -2381,7 +2428,7 @@ $END
     --
     dbms_lob.freetemporary( l_data );
     dbms_lob.freetemporary( l_cd );
-  end;
+  end add_file;
   --
   function get_count( p_zipped_blob blob )
   return integer
@@ -2391,7 +2438,7 @@ $END
     get_zip_info( p_zipped_blob, l_info );
     return nvl( l_info.cnt, 0 );
   end;
---
+  --
   function get_comment( p_zipped_blob blob )
   return clob
   is
@@ -2403,7 +2450,7 @@ $END
                       , l_info.comment3
                       );
   end;
---
+  --
   procedure set_comment
     ( p_zipped_blob in out nocopy blob
     , p_comment varchar2 character set any_cs := null
@@ -2430,7 +2477,7 @@ $END
                         , l_len + 2
                         , utl_raw.concat( little_endian( l_len, 2 ), l_comment )
                         );
-  end;
+  end set_comment;
   --
   function get_file_info
     ( p_zipped_blob blob
@@ -2476,7 +2523,7 @@ $END
     --
     return p_file_info.found;
   end get_file_info;
---
+  --
   function get_file_info
     ( p_zipped_blob blob
     , p_name varchar2 character set any_cs := null
@@ -2709,6 +2756,6 @@ $END
       end if;
       raise;
   end add_csv;
---
+  --
 end;
 /
