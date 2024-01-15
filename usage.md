@@ -172,7 +172,7 @@ begin
   dbms_lob.freetemporary( l_file );
   dbms_lob.freetemporary( l_zip );
 end;</code></pre>
-Or loogin all files
+Or looping all files
 <pre><code>declare
   l_zip blob;
   l_file blob;
