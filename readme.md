@@ -15,8 +15,8 @@ In the package spec are 2 constants which control the conditional compilation of
 
 With those constants you can control usage (and required grant) of the Oracle packages dbms_crypto and utl_file.
  
-dbms_crypto is used for the Winzip AES encrypting, if you disable usage of dbms_crypto a much slower version is used, see [as_crypto](https://github.com/antonscheffer/as_crypto), if you enable it you need execute right on Oracle supplied package on dbms_crypto.
+dbms_crypto is used for the Winzip AES encrypting, if you disable usage of dbms_crypto a much slower version is used, see [as_crypto](https://github.com/antonscheffer/as_crypto), if you enable it you need execute right on the Oracle supplied package dbms_crypto.
 
-utl_file is only used in as_zip.save_zip, you have to decide for yourself it you need that. But if you want to save a zip file on the file system of your database server you will have to set use_utl_file to true, and need execute right on Oracle supplied package on utl_file.
+utl_file is only used in as_zip.save_zip, you have to decide for yourself it you need that. But if you want to save a zip file on the file system of your database server you will have to set use_utl_file to true, and need execute right on the Oracle supplied package utl_file.
 
 You might have to (re)compile the package body after you make any changes to these constants.
