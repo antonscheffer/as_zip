@@ -53,9 +53,8 @@ is
   l_key1 raw(4);
   l_key2 raw(4);
   l_key3 raw(4);
-$IF as_zip.use_dbms_crypto
+$IF not as_zip.use_dbms_crypto
 $THEN
-$ELSE
   type tp_aes_tab is table of number index by pls_integer;
   --
   function bitor( x simple_integer, y simple_integer )
@@ -1116,9 +1115,8 @@ $END
     l_sum raw(20);
     l_block# integer;
     l_decrypted raw(128);
-$IF as_zip.use_dbms_crypto
+$IF not as_zip.use_dbms_crypto
 $THEN
-$ELSE
     l_aes_key tp_aes_tab;
 $END
     --
@@ -1213,9 +1211,8 @@ $END
           raise_application_error( -20013, 'Wrong password provided' );
         end if;
         l_key := utl_raw.substr( l_key, 1, l_key_bits / 8 );
-$IF as_zip.use_dbms_crypto
+$IF not as_zip.use_dbms_crypto
 $THEN
-$ELSE
         aes_encrypt_key( l_key, l_aes_key );
 $END
         l_crypto_2do := p_fh.compressed_len - l_salt_len - 2 - 10; -- Password verification value and authentication code
@@ -1229,15 +1226,15 @@ $END
           loop
 $IF as_zip.use_dbms_crypto
 $THEN
-    l_decrypted := dbms_crypto.encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
-                                      , dbms_crypto.ENCRYPT_AES + dbms_crypto.CHAIN_ECB + dbms_crypto.PAD_NONE
-                                      , l_key
-                                      );
+            l_decrypted := dbms_crypto.encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
+                                              , dbms_crypto.ENCRYPT_AES + dbms_crypto.CHAIN_ECB + dbms_crypto.PAD_NONE
+                                              , l_key
+                                              );
 $ELSE
-    l_decrypted := aes_encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
-                              , l_key_bits / 8
-                              , l_aes_key
-                              );
+            l_decrypted := aes_encrypt( utl_raw.reverse( to_char( l_block#, 'fm' || lpad( 'X', 32, '0' ) ) )
+                                      , l_key_bits / 8
+                                      , l_aes_key
+                                      );
 $END
             l_rv_buf := utl_raw.concat( l_rv_buf
                                       , utl_raw.bit_xor( utl_raw.substr( l_crypto_buf, 1 + i*16, least( 16, l_crypto_2do - i*16 ) )
@@ -1823,9 +1820,8 @@ $END
     l_encrypted raw(16);
     l_len pls_integer;
     l_tmp blob;
-$IF as_zip.use_dbms_crypto
+$IF not as_zip.use_dbms_crypto
 $THEN
-$ELSE
     l_aes_key tp_aes_tab;
 $END
   l_buf varchar2(32767);
@@ -1840,28 +1836,28 @@ $END
     return l_tmp;
   end;
   begin
-   if p_zipcrypto
-   then
-    init_zipcrypto_tab;
-    init_keys( l_pw );
-    for i in 1 .. 11
-    loop
-      l_buf2 := l_buf2 || zipcrypto_encrypt( to_char( trunc( dbms_random.value( 0, 256 ) ), 'fmXX' ) );
-    end loop;
-    l_buf2 := l_buf2 || zipcrypto_encrypt( utl_raw.substr( p_crc32, 4, 1 ) );
-    dbms_lob.createtemporary( l_rv, true, c_lob_duration );
-    for i in 0 .. trunc( ( dbms_lob.getlength( p_src ) - 1 ) / 16370 )
-    loop
-      l_buf := dbms_lob.substr( p_src, 16370, i * 16370 + 1 );
-      for j in 1 ..  length( l_buf ) / 2
+    if p_zipcrypto
+    then
+      init_zipcrypto_tab;
+      init_keys( l_pw );
+      for i in 1 .. 11
       loop
-        l_buf2 := l_buf2 || zipcrypto_encrypt( substr( l_buf, j * 2 - 1, 2 ) );
+        l_buf2 := l_buf2 || zipcrypto_encrypt( to_char( trunc( dbms_random.value( 0, 256 ) ), 'fmXX' ) );
       end loop;
-      dbms_lob.writeappend( l_rv, length( l_buf2 ) / 2, l_buf2 );
-      l_buf2 := null;
-    end loop;
-    return l_rv;
-   end if;
+      l_buf2 := l_buf2 || zipcrypto_encrypt( utl_raw.substr( p_crc32, 4, 1 ) );
+      dbms_lob.createtemporary( l_rv, true, c_lob_duration );
+      for i in 0 .. trunc( ( dbms_lob.getlength( p_src ) - 1 ) / 16370 )
+      loop
+        l_buf := dbms_lob.substr( p_src, 16370, i * 16370 + 1 );
+        for j in 1 ..  length( l_buf ) / 2
+        loop
+          l_buf2 := l_buf2 || zipcrypto_encrypt( substr( l_buf, j * 2 - 1, 2 ) );
+        end loop;
+        dbms_lob.writeappend( l_rv, length( l_buf2 ) / 2, l_buf2 );
+        l_buf2 := null;
+      end loop;
+      return l_rv;
+    end if;
 $IF as_zip.use_dbms_crypto
 $THEN
     l_salt := dbms_crypto.randombytes( l_key_bits / 16 );
@@ -1891,9 +1887,8 @@ $END
     end loop;
     l_keys := utl_raw.substr( l_keys, 1, l_key_length );
     l_key := utl_raw.substr( l_keys, 1, l_key_bits / 8 );
-$IF as_zip.use_dbms_crypto
+$IF not as_zip.use_dbms_crypto
 $THEN
-$ELSE
     aes_encrypt_key( l_key, l_aes_key );
 $END
     l_rv := utl_raw.concat( l_salt, utl_raw.substr( l_keys, -2, 2 ) );
@@ -2757,5 +2752,5 @@ $END
       raise;
   end add_csv;
   --
-end;
+end as_zip;
 /
